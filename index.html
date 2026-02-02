@@ -3,66 +3,21 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Random TTR-Style Map Generator</title>
+  <title>Ticket to Random</title>
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
   <div class="wrap">
-    <div class="panel">
-      <h1>Random Map Generator</h1>
-
-      <div class="row">
-        <label>Seed</label>
-        <input id="seed" type="text" value="demo-seed-123" />
-      </div>
-
-      <div class="row">
-        <label>Cities</label>
-        <input id="nCities" type="number" min="10" max="80" value="40" />
-      </div>
-
-      <div class="row">
-        <label>Edges target</label>
-        <input id="eTarget" type="number" min="40" max="140" value="72" />
-      </div>
-
-      <div class="row">
-        <label>kNN (candidates)</label>
-        <input id="kNN" type="number" min="3" max="8" value="5" />
-      </div>
-
-      <div class="row">
-        <label>Max degree</label>
-        <input id="maxDeg" type="number" min="3" max="10" value="6" />
-      </div>
-
-      <div class="row">
-        <label>Gray %</label>
-        <input id="pGray" type="number" min="0" max="1" step="0.05" value="0.25" />
-      </div>
-
-      <div class="row">
-        <label>Show labels</label>
-        <input id="labels" type="checkbox" checked />
-      </div>
-
-      <button id="regen">Regenerate</button>
-      <button id="newSeed">New random seed</button>
-
-      <div class="small">
-        Notes:
-        <ul>
-          <li>Routes are mostly non-crossing (crossings are prevented during selection).</li>
-          <li>Connectivity is guaranteed via an MST backbone.</li>
-          <li>Route lengths are 1-6 based on geometric distance percentile scaling.</li>
-          <li>Colors are balanced by total route-length "load".</li>
-        </ul>
-      </div>
-
-      <div id="stats" class="stats">Stats will appear here.</div>
+    <div class="hud">
+      <div class="title">Ticket to Random</div>
+      <div id="routeInfo" class="route-info">Click a route to see details</div>
+      <button id="regenBtn" class="regen">Regenerate Map</button>
     </div>
-
-    <canvas id="c"></canvas>
+    <div class="stage">
+      <div id="gameBox" class="game-box">
+        <svg id="mapSvg" viewBox="0 0 1000 1000" aria-label="Route map"></svg>
+      </div>
+    </div>
   </div>
 
   <script src="app.js"></script>

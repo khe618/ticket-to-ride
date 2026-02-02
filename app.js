@@ -29,9 +29,6 @@ function makeRng(seedStr) {
   const seed = xmur3(seedStr);
   return sfc32(seed(), seed(), seed(), seed());
 }
-function randInt(rng, lo, hi) { // inclusive
-  return lo + Math.floor(rng() * (hi - lo + 1));
-}
 function shuffleInPlace(rng, arr) {
   for (let i = arr.length - 1; i > 0; i--) {
     const j = Math.floor(rng() * (i + 1));
@@ -95,83 +92,116 @@ class DSU {
 }
 
 /** ---------- Map generation ---------- **/
-function generateCities(rng, N) {
-  // 4 regions with gaussian sampling + min distance rejection.
-  const regions = 4;
-  const centers = [];
-  const minCenterDist = 0.35;
+function generateCities(rng, N, bounds) {
+  // Poisson disk sampling for even spacing (no region clustering).
+  const xMin = bounds.xMin;
+  const xMax = bounds.xMax;
+  const yMin = bounds.yMin;
+  const yMax = bounds.yMax;
+  const w = xMax - xMin;
+  const h = yMax - yMin;
 
-  function randNorm() {
-    // Box-Muller
-    let u = 0, v = 0;
-    while (u === 0) u = rng();
-    while (v === 0) v = rng();
-    return Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
-  }
+  const area = w * h;
+  let minDist = 0.85 * Math.sqrt(area / N);
+  minDist = clamp(minDist, 0.045 * Math.min(w, h), 0.12 * Math.min(w, h));
 
-  // Place region centers
-  while (centers.length < regions) {
-    const c = { x: 0.15 + 0.7 * rng(), y: 0.15 + 0.7 * rng() };
-    if (centers.every(o => dist(c, o) >= minCenterDist)) centers.push(c);
-  }
+  function poissonSample(targetCount) {
+    const cellSize = minDist / Math.SQRT2;
+    const gridW = Math.ceil(w / cellSize);
+    const gridH = Math.ceil(h / cellSize);
+    const grid = Array.from({ length: gridW * gridH }, () => null);
+    const active = [];
+    const points = [];
 
-  // Allocate cities per region
-  const base = Math.floor(N / regions);
-  const counts = Array(regions).fill(base);
-  for (let i = 0; i < (N - base*regions); i++) counts[i]++;
-
-  const cities = [];
-  const minDist = 0.06; // tune for spacing
-
-  // helper to attempt add point with minDist
-  function tryAdd(x, y) {
-    const p = { x, y };
-    if (x < 0.05 || x > 0.95 || y < 0.05 || y > 0.95) return false;
-    for (const q of cities) if (dist(p, q) < minDist) return false;
-    p.id = cities.length;
-    p.name = `City ${p.id+1}`;
-    cities.push(p);
-    return true;
-  }
-
-  // Add clustered points
-  for (let r = 0; r < regions; r++) {
-    const c = centers[r];
-    const sigma = 0.10; // cluster tightness
-    let added = 0;
-    let tries = 0;
-    while (added < counts[r] && tries < 20000) {
-      tries++;
-      const x = c.x + sigma * randNorm();
-      const y = c.y + sigma * randNorm();
-      if (tryAdd(x, y)) added++;
+    function gridIndex(x, y) {
+      const gx = Math.floor((x - xMin) / cellSize);
+      const gy = Math.floor((y - yMin) / cellSize);
+      return { gx, gy, idx: gy * gridW + gx };
     }
+
+    function inBounds(x, y) {
+      return x >= xMin && x <= xMax && y >= yMin && y <= yMax;
+    }
+
+    function farEnough(x, y) {
+      const gi = gridIndex(x, y);
+      const gx0 = Math.max(0, gi.gx - 2);
+      const gx1 = Math.min(gridW - 1, gi.gx + 2);
+      const gy0 = Math.max(0, gi.gy - 2);
+      const gy1 = Math.min(gridH - 1, gi.gy + 2);
+      for (let gy = gy0; gy <= gy1; gy++) {
+        for (let gx = gx0; gx <= gx1; gx++) {
+          const p = grid[gy * gridW + gx];
+          if (!p) continue;
+          if (dist(p, { x, y }) < minDist) return false;
+        }
+      }
+      return true;
+    }
+
+    // initial point
+    const x0 = xMin + w * rng();
+    const y0 = yMin + h * rng();
+    const p0 = { x: x0, y: y0 };
+    points.push(p0);
+    active.push(p0);
+    const g0 = gridIndex(x0, y0);
+    grid[g0.idx] = p0;
+
+    const k = 30;
+    while (active.length && points.length < targetCount) {
+      const idx = Math.floor(rng() * active.length);
+      const p = active[idx];
+      let found = false;
+      for (let i = 0; i < k; i++) {
+        const ang = rng() * Math.PI * 2;
+        const rad = minDist * (1 + rng());
+        const x = p.x + Math.cos(ang) * rad;
+        const y = p.y + Math.sin(ang) * rad;
+        if (!inBounds(x, y)) continue;
+        if (!farEnough(x, y)) continue;
+        const np = { x, y };
+        points.push(np);
+        active.push(np);
+        const gi = gridIndex(x, y);
+        grid[gi.idx] = np;
+        found = true;
+        if (points.length >= targetCount) break;
+      }
+      if (!found) active.splice(idx, 1);
+    }
+    return points;
   }
 
-  // If we somehow undershoot, fill uniformly
-  let guard = 0;
-  while (cities.length < N && guard++ < 20000) {
-    const x = 0.05 + 0.90 * rng();
-    const y = 0.05 + 0.90 * rng();
-    tryAdd(x, y);
+  let points = poissonSample(N);
+  if (points.length < N) {
+    minDist *= 0.9;
+    points = poissonSample(N);
   }
+
+  const cities = points.slice(0, N).map((p, i) => ({
+    x: p.x,
+    y: p.y,
+    id: i,
+    name: `City ${i + 1}`,
+  }));
 
   // Light relaxation to reduce near-overlaps (Lloyd-ish)
-  for (let it = 0; it < 10; it++) {
+  for (let it = 0; it < 8; it++) {
     for (const a of cities) {
       let fx = 0, fy = 0;
       for (const b of cities) {
         if (a === b) continue;
         const d = dist(a, b);
         if (d < 1e-6) continue;
-        const push = d < (minDist*1.05) ? (minDist*1.05 - d) : 0;
+        const push = d < (minDist*1.12) ? (minDist*1.12 - d) : 0;
         if (push > 0) {
           fx += (a.x - b.x) / d * push * 0.15;
           fy += (a.y - b.y) / d * push * 0.15;
         }
       }
-      a.x = clamp(a.x + fx, 0.05, 0.95);
-      a.y = clamp(a.y + fy, 0.05, 0.95);
+      a.x = clamp(a.x + fx, xMin, xMax);
+      a.y = clamp(a.y + fy, yMin, yMax);
     }
   }
 
@@ -349,7 +379,9 @@ function generateMap(seedStr, params) {
   const maxDeg = params.maxDeg;
   const pGray = params.pGray;
 
-  const cities = generateCities(rng, N);
+  const margin = 0.08;
+  const bounds = { xMin: margin, xMax: 1 - margin, yMin: margin, yMax: 1 - margin };
+  const cities = generateCities(rng, N, bounds);
   const candidates = buildCandidateEdges(cities, k);
 
   const mst = computeMST(cities, candidates);
@@ -370,15 +402,13 @@ function generateMap(seedStr, params) {
   return { cities, edges: res.edges, deg: res.deg };
 }
 
-/** ---------- Rendering ---------- **/
-function drawMap(ctx, canvas, map, opts) {
+/** ---------- SVG Rendering ---------- **/
+function renderSvg(svg, map, opts) {
   const { cities, edges } = map;
+  const box = 1000;
+  const pad = 120;
+  const usable = box - pad * 2;
 
-  // Fit to canvas with padding
-  const pad = 60;
-  const w = canvas.width, h = canvas.height;
-
-  // Compute bbox in [0,1]
   let minX=Infinity, minY=Infinity, maxX=-Infinity, maxY=-Infinity;
   for (const c of cities) {
     minX = Math.min(minX, c.x); minY = Math.min(minY, c.y);
@@ -388,28 +418,83 @@ function drawMap(ctx, canvas, map, opts) {
   const by = maxY - minY || 1;
 
   function toScreen(p) {
-    const sx = pad + ( (p.x - minX) / bx ) * (w - 2*pad);
-    const sy = pad + ( (p.y - minY) / by ) * (h - 2*pad);
+    const sx = pad + ( (p.x - minX) / bx ) * usable;
+    const sy = pad + ( (p.y - minY) / by ) * usable;
     return { x: sx, y: sy };
   }
 
-  ctx.clearRect(0,0,w,h);
+  function quadPoint(a, c, b, t) {
+    const mt = 1 - t;
+    return {
+      x: mt*mt*a.x + 2*mt*t*c.x + t*t*b.x,
+      y: mt*mt*a.y + 2*mt*t*c.y + t*t*b.y,
+    };
+  }
 
-  // subtle grid
-  ctx.save();
-  ctx.globalAlpha = 0.08;
-  ctx.strokeStyle = "#8aa0d6";
-  for (let x=pad; x<w-pad; x+=80){ ctx.beginPath(); ctx.moveTo(x,pad); ctx.lineTo(x,h-pad); ctx.stroke(); }
-  for (let y=pad; y<h-pad; y+=80){ ctx.beginPath(); ctx.moveTo(pad,y); ctx.lineTo(w-pad,y); ctx.stroke(); }
-  ctx.restore();
+  function quadTangent(a, c, b, t) {
+    return {
+      x: 2*(1-t)*(c.x - a.x) + 2*t*(b.x - c.x),
+      y: 2*(1-t)*(c.y - a.y) + 2*t*(b.y - c.y),
+    };
+  }
 
-  // Draw edges (routes)
-  // Thickness scales a bit with route length; draw a darker under-stroke for contrast
+  function buildArcTable(a, c, b, steps = 40) {
+    const table = [{ t: 0, len: 0, p: a }];
+    let total = 0;
+    let prev = a;
+    for (let i = 1; i <= steps; i++) {
+      const t = i / steps;
+      const p = quadPoint(a, c, b, t);
+      total += Math.hypot(p.x - prev.x, p.y - prev.y);
+      table.push({ t, len: total, p });
+      prev = p;
+    }
+    return table;
+  }
+
+  function tAtLength(table, targetLen) {
+    if (targetLen <= 0) return 0;
+    const last = table[table.length - 1];
+    if (targetLen >= last.len) return 1;
+    for (let i = 1; i < table.length; i++) {
+      const a = table[i - 1];
+      const b = table[i];
+      if (targetLen <= b.len) {
+        const span = b.len - a.len || 1;
+        const f = (targetLen - a.len) / span;
+        return a.t + (b.t - a.t) * f;
+      }
+    }
+    return 1;
+  }
+
+  svg.innerHTML = "";
+
+  for (let x = pad; x <= box - pad; x += 80) {
+    const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+    line.setAttribute("x1", x);
+    line.setAttribute("y1", pad);
+    line.setAttribute("x2", x);
+    line.setAttribute("y2", box - pad);
+    line.setAttribute("class", "grid-line");
+    svg.appendChild(line);
+  }
+  for (let y = pad; y <= box - pad; y += 80) {
+    const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+    line.setAttribute("x1", pad);
+    line.setAttribute("y1", y);
+    line.setAttribute("x2", box - pad);
+    line.setAttribute("y2", y);
+    line.setAttribute("class", "grid-line");
+    svg.appendChild(line);
+  }
+
+  const routeGroup = document.createElementNS("http://www.w3.org/2000/svg", "g");
+  svg.appendChild(routeGroup);
+
   for (const e of edges) {
     const a = toScreen(cities[e.u]);
     const b = toScreen(cities[e.v]);
-
-    // curve slightly to reduce overlap (deterministic from endpoints)
     const mx = (a.x + b.x) / 2;
     const my = (a.y + b.y) / 2;
     const dx = b.x - a.x, dy = b.y - a.y;
@@ -420,108 +505,108 @@ function drawMap(ctx, canvas, map, opts) {
     const mag = 8 + e.len * 1.5;
     const cx = mx + nx * mag * sign;
     const cy = my + ny * mag * sign;
-
     const width = 2.5 + e.len * 0.9;
 
-    // under-stroke
-    ctx.beginPath();
-    ctx.moveTo(a.x, a.y);
-    ctx.quadraticCurveTo(cx, cy, b.x, b.y);
-    ctx.strokeStyle = "rgba(0,0,0,0.55)";
-    ctx.lineWidth = width + 3;
-    ctx.lineCap = "round";
-    ctx.stroke();
+    const pathData = `M ${a.x} ${a.y} Q ${cx} ${cy} ${b.x} ${b.y}`;
 
-    // color stroke
-    ctx.beginPath();
-    ctx.moveTo(a.x, a.y);
-    ctx.quadraticCurveTo(cx, cy, b.x, b.y);
-    ctx.strokeStyle = e.color.hex;
-    ctx.lineWidth = width;
-    ctx.lineCap = "round";
-    ctx.stroke();
+    const under = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    under.setAttribute("d", pathData);
+    under.setAttribute("class", "route route-under");
+    under.setAttribute("stroke-width", width + 3);
+    routeGroup.appendChild(under);
 
-    // draw little "train segments" dots along the route (1-6)
-    ctx.save();
-    ctx.fillStyle = "rgba(255,255,255,0.85)";
-    const steps = e.len;
-    for (let i = 1; i <= steps; i++) {
-      const t = i / (steps + 1);
-      // quadratic bezier point
-      const x = (1-t)*(1-t)*a.x + 2*(1-t)*t*cx + t*t*b.x;
-      const y = (1-t)*(1-t)*a.y + 2*(1-t)*t*cy + t*t*b.y;
-      ctx.beginPath();
-      ctx.arc(x, y, 2.0, 0, Math.PI*2);
-      ctx.fill();
+    const color = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    color.setAttribute("d", pathData);
+    color.setAttribute("class", "route route-color");
+    color.setAttribute("stroke", e.color.hex);
+    color.setAttribute("stroke-width", width);
+    color.style.setProperty("--route-w", `${width}px`);
+    const edgeId = `${e.u}-${e.v}`;
+    color.dataset.edgeId = edgeId;
+    color.dataset.len = String(e.len);
+    color.dataset.color = e.color.name;
+    color.dataset.from = cities[e.u].name;
+    color.dataset.to = cities[e.v].name;
+    routeGroup.appendChild(color);
+
+    const arcTable = buildArcTable(a, { x: cx, y: cy }, b, 50);
+    const totalLen = arcTable[arcTable.length - 1].len || 1;
+    const blockLen = totalLen / e.len;
+
+    for (let i = 0; i < e.len; i++) {
+      const targetLen = blockLen * (i + 0.5);
+      const t = tAtLength(arcTable, targetLen);
+      const p = quadPoint(a, { x: cx, y: cy }, b, t);
+      const tan = quadTangent(a, { x: cx, y: cy }, b, t);
+      const ang = Math.atan2(tan.y, tan.x) * 180 / Math.PI;
+
+      const bw = Math.min(30, Math.max(18, blockLen * 0.95));
+      const bh = Math.min(12, Math.max(8, bw * 0.45));
+
+      const block = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+      block.setAttribute("x", p.x - bw / 2);
+      block.setAttribute("y", p.y - bh / 2);
+      block.setAttribute("width", bw);
+      block.setAttribute("height", bh);
+      block.setAttribute("rx", 2);
+      block.setAttribute("ry", 2);
+      block.setAttribute("class", "route-seg route-hit");
+      block.setAttribute("fill", e.color.hex);
+      block.style.setProperty("--route-w", `${bw}px`);
+      block.dataset.edgeId = edgeId;
+      block.dataset.len = String(e.len);
+      block.dataset.color = e.color.name;
+      block.dataset.from = cities[e.u].name;
+      block.dataset.to = cities[e.v].name;
+      block.setAttribute("transform", `rotate(${ang} ${p.x} ${p.y})`);
+      routeGroup.appendChild(block);
     }
-    ctx.restore();
   }
 
-  // Draw cities
+  const cityGroup = document.createElementNS("http://www.w3.org/2000/svg", "g");
+  svg.appendChild(cityGroup);
+
   for (const c of cities) {
     const p = toScreen(c);
-    // glow
-    ctx.save();
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, 10, 0, Math.PI*2);
-    ctx.fillStyle = "rgba(110,160,255,0.12)";
-    ctx.fill();
-    ctx.restore();
 
-    // node
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, 6.5, 0, Math.PI*2);
-    ctx.fillStyle = "#e7eaf0";
-    ctx.fill();
-    ctx.lineWidth = 2;
-    ctx.strokeStyle = "#0b0d12";
-    ctx.stroke();
+    const glow = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+    glow.setAttribute("cx", p.x);
+    glow.setAttribute("cy", p.y);
+    glow.setAttribute("r", 12);
+    glow.setAttribute("class", "city-glow");
+    cityGroup.appendChild(glow);
+
+    const node = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+    node.setAttribute("cx", p.x);
+    node.setAttribute("cy", p.y);
+    node.setAttribute("r", 7);
+    node.setAttribute("class", "city");
+    cityGroup.appendChild(node);
 
     if (opts.labels) {
-      ctx.font = "12px system-ui, -apple-system, Segoe UI, Roboto, sans-serif";
-      ctx.fillStyle = "rgba(231,234,240,0.85)";
-      ctx.textAlign = "left";
-      ctx.textBaseline = "middle";
-      ctx.fillText(c.name, p.x + 10, p.y - 10);
+      const label = document.createElementNS("http://www.w3.org/2000/svg", "text");
+      label.setAttribute("x", p.x + 10);
+      label.setAttribute("y", p.y - 10);
+      label.setAttribute("class", "label");
+      label.textContent = c.name;
+      cityGroup.appendChild(label);
     }
   }
-}
-
-/** ---------- Stats / validation-ish ---------- **/
-function mapStats(map) {
-  const N = map.cities.length;
-  const E = map.edges.length;
-  const deg = map.deg;
-  const avgDeg = deg.reduce((a,b)=>a+b,0)/N;
-  const minDeg = Math.min(...deg);
-  const maxDeg = Math.max(...deg);
-
-  const lenCount = Array(7).fill(0);
-  let gray = 0;
-  const colorCount = new Map();
-
-  for (const e of map.edges) {
-    lenCount[e.len]++;
-    if (e.color.name === "gray") gray++;
-    colorCount.set(e.color.name, (colorCount.get(e.color.name)||0) + 1);
-  }
-
-  const lines = [];
-  lines.push(`Cities: ${N}`);
-  lines.push(`Routes: ${E}`);
-  lines.push(`Avg degree: ${avgDeg.toFixed(2)} (min ${minDeg}, max ${maxDeg})`);
-  lines.push(`Lengths 1..6: ` + [1,2,3,4,5,6].map(L=>`${L}:${lenCount[L]}`).join("  "));
-  lines.push(`Gray routes: ${gray} (${Math.round(100*gray/E)}%)`);
-  lines.push(`Colors (count):`);
-  const keys = [...colorCount.keys()].sort((a,b)=>a.localeCompare(b));
-  for (const k of keys) lines.push(`  ${k}: ${colorCount.get(k)}`);
-  return lines.join("\n");
 }
 
 /** ---------- App wiring ---------- **/
-const canvas = document.getElementById("c");
-const ctx = canvas.getContext("2d");
-const statsEl = document.getElementById("stats");
+const svg = document.getElementById("mapSvg");
+const routeInfo = document.getElementById("routeInfo");
+const regenBtn = document.getElementById("regenBtn");
+const DEFAULTS = {
+  seed: "demo-seed-123",
+  nCities: 40,
+  eTarget: 72,
+  kNN: 5,
+  maxDeg: 6,
+  pGray: 0.25,
+  labels: true,
+};
 
 function resize() {
   const rect = canvas.getBoundingClientRect();
@@ -537,45 +622,78 @@ let currentMap = null;
 
 function getParams() {
   return {
-    nCities: parseInt(document.getElementById("nCities").value, 10),
-    eTarget: parseInt(document.getElementById("eTarget").value, 10),
-    kNN: parseInt(document.getElementById("kNN").value, 10),
-    maxDeg: parseInt(document.getElementById("maxDeg").value, 10),
-    pGray: parseFloat(document.getElementById("pGray").value),
-    labels: document.getElementById("labels").checked,
+    nCities: DEFAULTS.nCities,
+    eTarget: DEFAULTS.eTarget,
+    kNN: DEFAULTS.kNN,
+    maxDeg: DEFAULTS.maxDeg,
+    pGray: DEFAULTS.pGray,
+    labels: DEFAULTS.labels,
   };
 }
 
 function render() {
   if (!currentMap) return;
   const opts = getParams();
-  drawMap(ctx, canvas, currentMap, { labels: opts.labels });
-  statsEl.textContent = mapStats(currentMap);
+  renderSvg(svg, currentMap, { labels: opts.labels });
+  wireRoutes();
 }
 
 function regenerate() {
-  const seedStr = document.getElementById("seed").value.trim() || "seed";
+  const seedStr = DEFAULTS.seed || "seed";
   const params = getParams();
 
   try {
     currentMap = generateMap(seedStr, params);
     render();
   } catch (err) {
-    statsEl.textContent = `Error: ${err.message}`;
-    ctx.clearRect(0,0,canvas.width,canvas.height);
+    svg.innerHTML = "";
   }
 }
 
-document.getElementById("regen").addEventListener("click", regenerate);
-document.getElementById("newSeed").addEventListener("click", () => {
-  const s = `seed-${Math.floor(Math.random()*1e9)}-${Date.now()}`;
-  document.getElementById("seed").value = s;
+function wireRoutes() {
+  const routes = svg.querySelectorAll(".route-color, .route-hit");
+
+  function setClassForEdge(edgeId, cls, on) {
+    if (!edgeId) return;
+    const els = svg.querySelectorAll(`[data-edge-id="${edgeId}"]`);
+    els.forEach(el => el.classList.toggle(cls, on));
+  }
+
+  function clearAll(cls) {
+    svg.querySelectorAll(`.${cls}`).forEach(el => el.classList.remove(cls));
+  }
+
+  routes.forEach((el) => {
+    el.addEventListener("mouseenter", () => {
+      const edgeId = el.dataset.edgeId;
+      setClassForEdge(edgeId, "route-hover", true);
+    });
+    el.addEventListener("mouseleave", () => {
+      const edgeId = el.dataset.edgeId;
+      setClassForEdge(edgeId, "route-hover", false);
+    });
+    el.addEventListener("click", (e) => {
+      clearAll("route-selected");
+      const edgeId = el.dataset.edgeId;
+      setClassForEdge(edgeId, "route-selected", true);
+      const from = el.dataset.from;
+      const to = el.dataset.to;
+      const len = el.dataset.len;
+      const color = el.dataset.color;
+      routeInfo.textContent = `${from} — ${to}\nLength: ${len}\nColor: ${color}`;
+      e.stopPropagation();
+    });
+  });
+}
+
+svg.addEventListener("click", () => {
+  svg.querySelectorAll(".route-selected").forEach(r => r.classList.remove("route-selected"));
+  routeInfo.textContent = "Click a route to see details";
+});
+
+regenBtn.addEventListener("click", () => {
+  DEFAULTS.seed = `seed-${Math.floor(Math.random()*1e9)}-${Date.now()}`;
   regenerate();
 });
 
-for (const id of ["seed","nCities","eTarget","kNN","maxDeg","pGray","labels"]) {
-  document.getElementById(id).addEventListener("change", regenerate);
-}
-
-resize();
 regenerate();
