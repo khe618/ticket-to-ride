@@ -179,11 +179,49 @@ function generateCities(rng, N, bounds) {
     points = poissonSample(N);
   }
 
+  const CITY_NAMES = [
+    "Valmere",
+    "Stonehaven",
+    "Alderon",
+    "Westfall",
+    "Brindle",
+    "Norwick",
+    "Calden",
+    "Evermont",
+    "Highmoor",
+    "Driftmark",
+    "Roswick",
+    "Falken",
+    "Lowen",
+    "Crestfall",
+    "Windor",
+    "Belmere",
+    "Thornby",
+    "Greyhaven",
+    "Ashen",
+    "Marrow",
+    "Halden",
+    "Verdan",
+    "Eastmere",
+    "Skarn",
+    "Brightonel",
+    "Northam",
+    "Elden",
+    "Larkspur",
+    "Holloway",
+    "Dunmere",
+    "Ravenel",
+    "Karsen",
+    "Velden",
+    "Mirewood",
+    "Solmar",
+  ];
+
   const cities = points.slice(0, N).map((p, i) => ({
     x: p.x,
     y: p.y,
     id: i,
-    name: `City ${i + 1}`,
+    name: CITY_NAMES[i] || `City ${i + 1}`,
   }));
 
   // Light relaxation to reduce near-overlaps (Lloyd-ish)
@@ -337,6 +375,56 @@ function assignLengths(edges) {
   }
 }
 
+function pruneCollinearEdges(cities, edges, angleDeg = 170) {
+  const edgeSet = new Set(edges.map(e => keyEdge(e.u, e.v)));
+  const adj = Array.from({ length: cities.length }, () => []);
+  for (const e of edges) {
+    adj[e.u].push(e.v);
+    adj[e.v].push(e.u);
+  }
+
+  function angleAt(a, b, c) {
+    // angle ABC between BA and BC
+    const bax = cities[a].x - cities[b].x;
+    const bay = cities[a].y - cities[b].y;
+    const bcx = cities[c].x - cities[b].x;
+    const bcy = cities[c].y - cities[b].y;
+    const dot = bax * bcx + bay * bcy;
+    const na = Math.hypot(bax, bay) || 1;
+    const nb = Math.hypot(bcx, bcy) || 1;
+    const cos = clamp(dot / (na * nb), -1, 1);
+    return Math.acos(cos) * 180 / Math.PI;
+  }
+
+  const toRemove = new Set();
+  for (let b = 0; b < cities.length; b++) {
+    const neighbors = adj[b];
+    for (let i = 0; i < neighbors.length; i++) {
+      for (let j = i + 1; j < neighbors.length; j++) {
+        const a = neighbors[i];
+        const c = neighbors[j];
+        const ang = angleAt(a, b, c);
+        if (ang < angleDeg) continue;
+
+        const keyAC = keyEdge(a, c);
+        if (!edgeSet.has(keyAC)) continue;
+
+        const dAB = dist(cities[a], cities[b]);
+        const dBC = dist(cities[b], cities[c]);
+        const dAC = dist(cities[a], cities[c]);
+
+        // If A-B-C are nearly collinear, drop the long direct edge A-C.
+        if (dAC >= Math.max(dAB, dBC) * 1.15) {
+          toRemove.add(keyAC);
+        }
+      }
+    }
+  }
+
+  if (toRemove.size === 0) return edges;
+  return edges.filter(e => !toRemove.has(keyEdge(e.u, e.v)));
+}
+
 const ROUTE_COLORS = [
   { name: "red",    hex: "#e74c3c" },
   { name: "blue",   hex: "#3498db" },
@@ -353,6 +441,11 @@ function assignColors(rng, edges, pGray) {
   // Balance by total length-load per color.
   const load = new Map();
   for (const c of ROUTE_COLORS) load.set(c.name, 0);
+  const usedByCity = new Map();
+  function citySet(id) {
+    if (!usedByCity.has(id)) usedByCity.set(id, new Set());
+    return usedByCity.get(id);
+  }
 
   // Sort longest first so balancing matters
   const sorted = [...edges].sort((a,b)=>b.len-a.len);
@@ -364,10 +457,14 @@ function assignColors(rng, edges, pGray) {
     }
     // choose among 3 lowest-load colors at random
     const ranked = [...ROUTE_COLORS].sort((a,b)=>load.get(a.name)-load.get(b.name));
-    const top = ranked.slice(0, 3);
-    const pick = top[Math.floor(rng() * top.length)];
+    const forbid = new Set([...citySet(e.u), ...citySet(e.v)]);
+    const allowed = ranked.filter(c => !forbid.has(c.name));
+    const pool = (allowed.length ? allowed : ranked).slice(0, 3);
+    const pick = pool[Math.floor(rng() * pool.length)];
     e.color = pick;
     load.set(pick.name, load.get(pick.name) + e.len);
+    citySet(e.u).add(pick.name);
+    citySet(e.v).add(pick.name);
   }
 }
 
@@ -397,9 +494,12 @@ function generateMap(seedStr, params) {
   }
 
   const res = addEdgesNoCrossing(rng, cities, mst, candidates, eTarget, maxDeg);
-  assignLengths(res.edges);
-  assignColors(rng, res.edges, pGray);
-  return { cities, edges: res.edges, deg: res.deg };
+  const pruned = pruneCollinearEdges(cities, res.edges, 150);
+  assignLengths(pruned);
+  assignColors(rng, pruned, pGray);
+  const deg = Array(cities.length).fill(0);
+  for (const e of pruned) { deg[e.u]++; deg[e.v]++; }
+  return { cities, edges: pruned, deg };
 }
 
 /** ---------- SVG Rendering ---------- **/
@@ -600,8 +700,8 @@ const routeInfo = document.getElementById("routeInfo");
 const regenBtn = document.getElementById("regenBtn");
 const DEFAULTS = {
   seed: "demo-seed-123",
-  nCities: 40,
-  eTarget: 72,
+  nCities: 35,
+  eTarget: 70,
   kNN: 5,
   maxDeg: 6,
   pGray: 0.25,
