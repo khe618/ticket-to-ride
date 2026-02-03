@@ -11,11 +11,22 @@
     <div class="hud">
       <div class="title">Ticket to Random</div>
       <div id="routeInfo" class="route-info">Click a route to see details</div>
+      <button id="submitBtn" class="submit" disabled>Submit Route</button>
       <button id="regenBtn" class="regen">Regenerate Map</button>
     </div>
     <div class="stage">
-      <div id="gameBox" class="game-box">
-        <svg id="mapSvg" viewBox="0 0 1000 1000" aria-label="Route map"></svg>
+      <div class="stage-inner">
+        <div id="gameBox" class="game-box">
+          <svg id="mapSvg" viewBox="0 0 1000 1000" aria-label="Route map"></svg>
+        </div>
+        <div class="legend" aria-label="Scoring legend">
+          <div class="legend-title">Route Scoring</div>
+          <div class="legend-row"><div class="legend-blocks"><span class="legend-block"></span></div><div class="legend-score">1</div></div>
+          <div class="legend-row"><div class="legend-blocks"><span class="legend-block"></span><span class="legend-block"></span></div><div class="legend-score">2</div></div>
+          <div class="legend-row"><div class="legend-blocks"><span class="legend-block"></span><span class="legend-block"></span><span class="legend-block"></span></div><div class="legend-score">4</div></div>
+          <div class="legend-row"><div class="legend-blocks"><span class="legend-block"></span><span class="legend-block"></span><span class="legend-block"></span><span class="legend-block"></span></div><div class="legend-score">7</div></div>
+          <div class="legend-row"><div class="legend-blocks"><span class="legend-block"></span><span class="legend-block"></span><span class="legend-block"></span><span class="legend-block"></span><span class="legend-block"></span></div><div class="legend-score">10</div></div>
+          <div class="legend-row"><div class="legend-blocks"><span class="legend-block"></span><span class="legend-block"></span><span class="legend-block"></span><span class="legend-block"></span><span class="legend-block"></span><span class="legend-block"></span></div><div class="legend-score">16</div></div>
       </div>
     </div>
   </div>
@@ -23,3 +34,4 @@
   <script src="app.js"></script>
 </body>
 </html>
+

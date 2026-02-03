@@ -45,10 +45,31 @@ body {
   font-weight: 600;
 }
 .regen:hover { background: #d8b989; }
+.submit {
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(70, 90, 60, 0.45);
+  background: #cfe8c4;
+  color: #24331f;
+  cursor: pointer;
+  font-weight: 700;
+}
+.submit:hover { background: #c1ddb6; }
+.submit:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  filter: grayscale(0.4);
+}
 .stage {
   display: grid;
   place-items: center;
   padding: 18px;
+}
+.stage-inner {
+  display: grid;
+  grid-template-columns: min(86vmin, 1200px) auto;
+  align-items: start;
+  gap: 14px;
 }
 .game-box {
   width: min(86vmin, 1200px);
@@ -61,6 +82,51 @@ body {
     linear-gradient(135deg, #e2c59a 0%, #d5b07c 45%, #c19462 100%);
   position: relative;
   overflow: hidden;
+}
+#mapSvg { position: relative; z-index: 1; }
+.legend {
+  position: relative;
+  background: rgba(255, 248, 235, 0.9);
+  border: 1px solid rgba(120, 90, 60, 0.35);
+  border-radius: 12px;
+  padding: 10px 12px;
+  box-shadow: 0 8px 18px rgba(60, 40, 20, 0.25);
+  font-size: 12px;
+  color: #3a2a1a;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.legend-title {
+  font-weight: 700;
+  font-size: 12px;
+  margin-bottom: 2px;
+  letter-spacing: 0.3px;
+}
+.legend-row {
+  display: grid;
+  grid-template-columns: 1fr 28px;
+  align-items: center;
+  gap: 8px;
+}
+.legend-blocks {
+  display: flex;
+  gap: 4px;
+}
+.legend-block {
+  width: 18px;
+  height: 8px;
+  border-radius: 3px;
+  background: #c3312f;
+  border: 2px solid rgba(20, 12, 6, 0.9);
+  box-shadow:
+    0 3px 0 rgba(0,0,0,0.55),
+    0 -1px 0 rgba(255,255,255,0.45);
+}
+.legend-score {
+  font-weight: 700;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 #mapSvg {
   width: 100%;
@@ -83,6 +149,13 @@ body {
 }
 .route-seg.route-hover { filter: drop-shadow(0 0 6px rgba(255,255,255,0.35)); }
 .route-seg.route-selected { filter: drop-shadow(0 0 12px rgba(255,255,255,0.7)); }
+.route-seg.route-claimed {
+  stroke: rgba(20, 12, 6, 0.9);
+  stroke-width: 2.4;
+  filter:
+    drop-shadow(0 3px 0 rgba(0,0,0,0.6))
+    drop-shadow(0 -1px 0 rgba(255,255,255,0.45));
+}
 .route-hit { cursor: pointer; }
 .city {
   fill: #e7eaf0;

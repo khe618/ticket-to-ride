@@ -433,7 +433,7 @@ const ROUTE_COLORS = [
   { name: "black",  hex: "#2d3436" },
   { name: "white",  hex: "#ecf0f1" },
   { name: "orange", hex: "#e67e22" },
-  { name: "purple", hex: "#9b59b6" },
+  { name: "pink",   hex: "#ff6fb1" },
 ];
 const GRAY = { name: "gray", hex: "#95a5a6" };
 
@@ -698,6 +698,7 @@ function renderSvg(svg, map, opts) {
 const svg = document.getElementById("mapSvg");
 const routeInfo = document.getElementById("routeInfo");
 const regenBtn = document.getElementById("regenBtn");
+const submitBtn = document.getElementById("submitBtn");
 const DEFAULTS = {
   seed: "demo-seed-123",
   nCities: 35,
@@ -719,6 +720,13 @@ function resize() {
 window.addEventListener("resize", resize);
 
 let currentMap = null;
+let selectedEdgeId = null;
+
+const CLAIM_COLORS = [
+  { name: "claim-red", hex: "#cc0000" },
+  { name: "claim-green", hex: "#008000" },
+  { name: "claim-blue", hex: "#0000cc" },
+];
 
 function getParams() {
   return {
@@ -736,6 +744,9 @@ function render() {
   const opts = getParams();
   renderSvg(svg, currentMap, { labels: opts.labels });
   wireRoutes();
+  selectedEdgeId = null;
+  submitBtn.disabled = true;
+  routeInfo.textContent = "Click a route to see details";
 }
 
 function regenerate() {
@@ -776,6 +787,8 @@ function wireRoutes() {
       clearAll("route-selected");
       const edgeId = el.dataset.edgeId;
       setClassForEdge(edgeId, "route-selected", true);
+      selectedEdgeId = edgeId;
+      submitBtn.disabled = false;
       const from = el.dataset.from;
       const to = el.dataset.to;
       const len = el.dataset.len;
@@ -789,6 +802,36 @@ function wireRoutes() {
 svg.addEventListener("click", () => {
   svg.querySelectorAll(".route-selected").forEach(r => r.classList.remove("route-selected"));
   routeInfo.textContent = "Click a route to see details";
+  selectedEdgeId = null;
+  submitBtn.disabled = true;
+});
+
+submitBtn.addEventListener("click", () => {
+  if (!selectedEdgeId) return;
+  const pick = CLAIM_COLORS[Math.floor(Math.random() * CLAIM_COLORS.length)];
+  const els = svg.querySelectorAll(`[data-edge-id="${selectedEdgeId}"]`);
+  els.forEach((el) => {
+    if (el.tagName === "path" && el.classList.contains("route-color")) {
+      el.setAttribute("stroke", pick.hex);
+    } else if (el.tagName === "rect") {
+      el.setAttribute("fill", pick.hex);
+      el.classList.add("route-claimed");
+      const w = parseFloat(el.getAttribute("width")) || 16;
+      const h = parseFloat(el.getAttribute("height")) || 7;
+      const cx = parseFloat(el.getAttribute("x")) + w / 2;
+      const cy = parseFloat(el.getAttribute("y")) + h / 2;
+      const nw = w * 1.18;
+      const nh = h * 1.18;
+      el.setAttribute("x", (cx - nw / 2).toFixed(2));
+      el.setAttribute("y", (cy - nh / 2).toFixed(2));
+      el.setAttribute("width", nw.toFixed(2));
+      el.setAttribute("height", nh.toFixed(2));
+      el.setAttribute("rx", 2.5);
+      el.setAttribute("ry", 2.5);
+    }
+    el.dataset.color = pick.name;
+  });
+  routeInfo.textContent += `\nClaimed: ${pick.name.replace("claim-","")}`;
 });
 
 regenBtn.addEventListener("click", () => {
