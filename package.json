@@ -1,0 +1,14 @@
+{
+  "name": "ticket-to-ride",
+  "version": "1.0.0",
+  "private": true,
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "chance": "^1.1.11",
+    "express": "^4.19.2",
+    "ws": "^8.18.0"
+  }
+}

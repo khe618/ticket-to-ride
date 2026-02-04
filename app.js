@@ -608,6 +608,8 @@ function renderSvg(svg, map, opts) {
     const width = 2.5 + e.len * 0.9;
 
     const pathData = `M ${a.x} ${a.y} Q ${cx} ${cy} ${b.x} ${b.y}`;
+    const claimedHex = e.claimedBy ? CLAIM_COLOR_MAP[e.claimedBy] : null;
+    const strokeHex = claimedHex || e.color.hex;
 
     const under = document.createElementNS("http://www.w3.org/2000/svg", "path");
     under.setAttribute("d", pathData);
@@ -618,15 +620,20 @@ function renderSvg(svg, map, opts) {
     const color = document.createElementNS("http://www.w3.org/2000/svg", "path");
     color.setAttribute("d", pathData);
     color.setAttribute("class", "route route-color");
-    color.setAttribute("stroke", e.color.hex);
+    color.setAttribute("stroke", strokeHex);
     color.setAttribute("stroke-width", width);
     color.style.setProperty("--route-w", `${width}px`);
     const edgeId = `${e.u}-${e.v}`;
     color.dataset.edgeId = edgeId;
     color.dataset.len = String(e.len);
-    color.dataset.color = e.color.name;
+    color.dataset.color = e.claimedBy || e.color.name;
     color.dataset.from = cities[e.u].name;
     color.dataset.to = cities[e.v].name;
+    color.dataset.claimed = e.claimedBy ? "true" : "false";
+    if (e.claimedBy) {
+      color.classList.add("route-claimed", "route-disabled");
+      color.style.pointerEvents = "none";
+    }
     routeGroup.appendChild(color);
 
     const arcTable = buildArcTable(a, { x: cx, y: cy }, b, 50);
@@ -644,20 +651,31 @@ function renderSvg(svg, map, opts) {
       const bh = Math.min(12, Math.max(8, bw * 0.45));
 
       const block = document.createElementNS("http://www.w3.org/2000/svg", "rect");
-      block.setAttribute("x", p.x - bw / 2);
-      block.setAttribute("y", p.y - bh / 2);
-      block.setAttribute("width", bw);
-      block.setAttribute("height", bh);
+      let bwDraw = bw;
+      let bhDraw = bh;
+      if (e.claimedBy) {
+        bwDraw = bw * 1.18;
+        bhDraw = bh * 1.18;
+      }
+      block.setAttribute("x", p.x - bwDraw / 2);
+      block.setAttribute("y", p.y - bhDraw / 2);
+      block.setAttribute("width", bwDraw);
+      block.setAttribute("height", bhDraw);
       block.setAttribute("rx", 2);
       block.setAttribute("ry", 2);
       block.setAttribute("class", "route-seg route-hit");
-      block.setAttribute("fill", e.color.hex);
+      block.setAttribute("fill", strokeHex);
       block.style.setProperty("--route-w", `${bw}px`);
       block.dataset.edgeId = edgeId;
       block.dataset.len = String(e.len);
-      block.dataset.color = e.color.name;
+      block.dataset.color = e.claimedBy || e.color.name;
       block.dataset.from = cities[e.u].name;
       block.dataset.to = cities[e.v].name;
+      block.dataset.claimed = e.claimedBy ? "true" : "false";
+      if (e.claimedBy) {
+        block.classList.add("route-claimed", "route-disabled");
+        block.style.pointerEvents = "none";
+      }
       block.setAttribute("transform", `rotate(${ang} ${p.x} ${p.y})`);
       routeGroup.appendChild(block);
     }
@@ -695,54 +713,15 @@ function renderSvg(svg, map, opts) {
 }
 
 /** ---------- App wiring ---------- **/
-const svg = document.getElementById("mapSvg");
-const routeInfo = document.getElementById("routeInfo");
-const regenBtn = document.getElementById("regenBtn");
-const submitBtn = document.getElementById("submitBtn");
-const faceUpEl = document.getElementById("faceUpCards");
-const gameBox = document.getElementById("gameBox");
-const stageInner = document.querySelector(".stage-inner");
-const ticketPileEl = document.getElementById("ticketPile");
-const deckBackEl = document.getElementById("deckBack");
-const DEFAULTS = {
-  seed: "demo-seed-123",
-  nCities: 35,
-  eTarget: 70,
-  kNN: 5,
-  maxDeg: 6,
-  pGray: 0.25,
-  labels: true,
-};
-
-function resize() {
-  const rect = canvas.getBoundingClientRect();
-  const dpr = window.devicePixelRatio || 1;
-  canvas.width = Math.floor(rect.width * dpr);
-  canvas.height = Math.floor(rect.height * dpr);
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0); // draw in CSS pixels
-  render();
-}
-window.addEventListener("resize", resize);
-
-let currentMap = null;
-let selectedEdgeId = null;
-
 const CLAIM_COLORS = [
   { name: "claim-red", hex: "#cc0000" },
   { name: "claim-green", hex: "#008000" },
   { name: "claim-blue", hex: "#0000cc" },
 ];
-
-const CARD_COUNTS = {
-  red: 12,
-  blue: 12,
-  green: 12,
-  yellow: 12,
-  black: 12,
-  white: 12,
-  orange: 12,
-  pink: 12,
-  rainbow: 14,
+const CLAIM_COLOR_MAP = {
+  red: "#cc0000",
+  green: "#008000",
+  blue: "#0000cc",
 };
 
 const CARD_ORDER = [
@@ -757,82 +736,39 @@ const CARD_ORDER = [
   "rainbow",
 ];
 
-let deck = [];
-let deckIndex = 0;
+const svg = document.getElementById("mapSvg");
+const routeInfo = document.getElementById("routeInfo");
+const submitBtn = document.getElementById("submitBtn");
+const faceUpEl = document.getElementById("faceUpCards");
+const gameBox = document.getElementById("gameBox");
+const stageInner = document.querySelector(".stage-inner");
+const ticketPileEl = document.getElementById("ticketPile");
+const deckBackEl = document.getElementById("deckBack");
+const playersListEl = document.getElementById("playersList");
+let currentMap = null;
+let selectedEdgeId = null;
 let ticketCounts = Object.fromEntries(CARD_ORDER.map(k => [k, 0]));
-
-function getParams() {
-  return {
-    nCities: DEFAULTS.nCities,
-    eTarget: DEFAULTS.eTarget,
-    kNN: DEFAULTS.kNN,
-    maxDeg: DEFAULTS.maxDeg,
-    pGray: DEFAULTS.pGray,
-    labels: DEFAULTS.labels,
-  };
-}
+let ws = null;
 
 function render() {
   if (!currentMap) return;
-  const opts = getParams();
-  renderSvg(svg, currentMap, { labels: opts.labels });
+  renderSvg(svg, currentMap, { labels: true });
   wireRoutes();
   selectedEdgeId = null;
   submitBtn.disabled = true;
   routeInfo.textContent = "Click a route to see details";
 }
 
-function regenerate() {
-  const seedStr = DEFAULTS.seed || "seed";
-  const params = getParams();
-
-  try {
-    currentMap = generateMap(seedStr, params);
-    render();
-    renderCards(seedStr);
-    renderTicketPile();
-  } catch (err) {
-    svg.innerHTML = "";
-  }
-}
-
-function buildDeck() {
-  const deck = [];
-  for (const [name, count] of Object.entries(CARD_COUNTS)) {
-    for (let i = 0; i < count; i++) deck.push(name);
-  }
-  return deck;
-}
-
-function renderCards(seedStr) {
-  const rng = makeRng(`${seedStr}-cards`);
-  deck = buildDeck();
-  shuffleInPlace(rng, deck);
-  deckIndex = 0;
-  const faceUp = [];
-  for (let i = 0; i < 5; i++) {
-    if (deckIndex < deck.length) faceUp.push(deck[deckIndex++]);
-  }
-  ticketCounts = Object.fromEntries(CARD_ORDER.map(k => [k, 0]));
-  faceUpEl.innerHTML = "";
-  for (const name of faceUp) {
-    const img = document.createElement("img");
-    img.className = "card";
-    img.alt = `${name} card`;
-    img.src = `img/${name}.png`;
-    img.dataset.color = name;
-    faceUpEl.appendChild(img);
-  }
-}
-
 function drawFaceUp(faceUp) {
   faceUpEl.innerHTML = "";
-  for (const name of faceUp) {
+  for (let i = 0; i < faceUp.length; i++) {
+    const name = faceUp[i];
     const img = document.createElement("img");
     img.className = "card";
     img.alt = `${name} card`;
     img.src = `img/${name}.png`;
     img.dataset.color = name;
+    img.dataset.index = String(i);
     faceUpEl.appendChild(img);
   }
 }
@@ -856,32 +792,63 @@ function renderTicketPile() {
   }
 }
 
+function renderPlayers(players, currentTurn) {
+  if (!playersListEl) return;
+  playersListEl.innerHTML = "";
+  players.forEach((p, idx) => {
+    const row = document.createElement("div");
+    row.className = `player${idx === currentTurn ? " active" : ""}`;
+    const swatch = document.createElement("div");
+    swatch.className = "player-swatch";
+    swatch.style.background = p.hex || p.color;
+    const label = document.createElement("div");
+    label.textContent = p.name || p.color;
+    row.appendChild(swatch);
+    row.appendChild(label);
+    playersListEl.appendChild(row);
+  });
+}
+
+function applyState(state) {
+  if (!state) return;
+  currentMap = { cities: state.cities || [], edges: state.edges || [] };
+  render();
+  drawFaceUp(state.faceUp || []);
+  ticketCounts = { ...Object.fromEntries(CARD_ORDER.map(k => [k, 0])), ...(state.tickets || {}) };
+  renderTicketPile();
+  renderPlayers(state.players || [], state.currentTurn ?? 0);
+}
+
+function connectSocket() {
+  const protocol = window.location.protocol === "https:" ? "wss" : "ws";
+  ws = new WebSocket(`${protocol}://${window.location.host}`);
+  ws.addEventListener("message", (event) => {
+    let msg = null;
+    try {
+      msg = JSON.parse(event.data);
+    } catch (err) {
+      return;
+    }
+    if (msg && msg.type === "state") {
+      applyState(msg.payload);
+    }
+  });
+}
+
 faceUpEl.addEventListener("click", (e) => {
   const target = e.target;
   if (!(target instanceof HTMLImageElement)) return;
-  const color = target.dataset.color;
-  if (!color) return;
-  ticketCounts[color] = (ticketCounts[color] || 0) + 1;
-
-  const imgs = Array.from(faceUpEl.querySelectorAll("img"));
-  const idx = imgs.indexOf(target);
-  const current = imgs.map(img => img.dataset.color);
-  if (idx !== -1) {
-    if (deckIndex < deck.length) {
-      current[idx] = deck[deckIndex++];
-    } else {
-      current.splice(idx, 1);
-    }
+  const idx = Number(target.dataset.index);
+  if (!Number.isFinite(idx)) return;
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: "draw_faceup", index: idx }));
   }
-  drawFaceUp(current);
-  renderTicketPile();
 });
 
 deckBackEl.addEventListener("click", () => {
-  if (deckIndex >= deck.length) return;
-  const color = deck[deckIndex++];
-  ticketCounts[color] = (ticketCounts[color] || 0) + 1;
-  renderTicketPile();
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: "draw_deck" }));
+  }
 });
 
 function wireRoutes() {
@@ -898,6 +865,7 @@ function wireRoutes() {
   }
 
   routes.forEach((el) => {
+    if (el.dataset.claimed === "true") return;
     el.addEventListener("mouseenter", () => {
       const edgeId = el.dataset.edgeId;
       setClassForEdge(edgeId, "route-hover", true);
@@ -911,7 +879,7 @@ function wireRoutes() {
       const edgeId = el.dataset.edgeId;
       setClassForEdge(edgeId, "route-selected", true);
       selectedEdgeId = edgeId;
-      submitBtn.disabled = false;
+      submitBtn.disabled = el.dataset.claimed === "true";
       const from = el.dataset.from;
       const to = el.dataset.to;
       const len = el.dataset.len;
@@ -931,38 +899,13 @@ svg.addEventListener("click", () => {
 
 submitBtn.addEventListener("click", () => {
   if (!selectedEdgeId) return;
-  const pick = CLAIM_COLORS[Math.floor(Math.random() * CLAIM_COLORS.length)];
-  const els = svg.querySelectorAll(`[data-edge-id="${selectedEdgeId}"]`);
-  els.forEach((el) => {
-    if (el.tagName === "path" && el.classList.contains("route-color")) {
-      el.setAttribute("stroke", pick.hex);
-    } else if (el.tagName === "rect") {
-      el.setAttribute("fill", pick.hex);
-      el.classList.add("route-claimed");
-      const w = parseFloat(el.getAttribute("width")) || 16;
-      const h = parseFloat(el.getAttribute("height")) || 7;
-      const cx = parseFloat(el.getAttribute("x")) + w / 2;
-      const cy = parseFloat(el.getAttribute("y")) + h / 2;
-      const nw = w * 1.18;
-      const nh = h * 1.18;
-      el.setAttribute("x", (cx - nw / 2).toFixed(2));
-      el.setAttribute("y", (cy - nh / 2).toFixed(2));
-      el.setAttribute("width", nw.toFixed(2));
-      el.setAttribute("height", nh.toFixed(2));
-      el.setAttribute("rx", 2.5);
-      el.setAttribute("ry", 2.5);
-    }
-    el.dataset.color = pick.name;
-  });
-  routeInfo.textContent += `\nClaimed: ${pick.name.replace("claim-","")}`;
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: "submit_route", edgeId: selectedEdgeId }));
+  }
 });
 
-regenBtn.addEventListener("click", () => {
-  DEFAULTS.seed = `seed-${Math.floor(Math.random()*1e9)}-${Date.now()}`;
-  regenerate();
-});
 
-regenerate();
+connectSocket();
 
 if (typeof ResizeObserver !== "undefined") {
   const ro = new ResizeObserver(() => updateCardSizing());
