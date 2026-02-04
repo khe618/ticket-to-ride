@@ -592,6 +592,7 @@ function renderSvg(svg, map, opts) {
   const routeGroup = document.createElementNS("http://www.w3.org/2000/svg", "g");
   svg.appendChild(routeGroup);
 
+  const tickets = opts.tickets || {};
   for (const e of edges) {
     const a = toScreen(cities[e.u]);
     const b = toScreen(cities[e.v]);
@@ -610,6 +611,7 @@ function renderSvg(svg, map, opts) {
     const pathData = `M ${a.x} ${a.y} Q ${cx} ${cy} ${b.x} ${b.y}`;
     const claimedHex = e.claimedBy ? CLAIM_COLOR_MAP[e.claimedBy] : null;
     const strokeHex = claimedHex || e.color.hex;
+    const affordable = !e.claimedBy && canAffordTickets(tickets, e.color.name, e.len);
 
     const under = document.createElementNS("http://www.w3.org/2000/svg", "path");
     under.setAttribute("d", pathData);
@@ -627,11 +629,16 @@ function renderSvg(svg, map, opts) {
     color.dataset.edgeId = edgeId;
     color.dataset.len = String(e.len);
     color.dataset.color = e.claimedBy || e.color.name;
+    color.dataset.routeColor = e.color.name;
     color.dataset.from = cities[e.u].name;
     color.dataset.to = cities[e.v].name;
     color.dataset.claimed = e.claimedBy ? "true" : "false";
+    color.dataset.affordable = affordable ? "true" : "false";
     if (e.claimedBy) {
       color.classList.add("route-claimed", "route-disabled");
+      color.style.pointerEvents = "none";
+    } else if (!affordable) {
+      color.classList.add("route-disabled");
       color.style.pointerEvents = "none";
     }
     routeGroup.appendChild(color);
@@ -669,11 +676,16 @@ function renderSvg(svg, map, opts) {
       block.dataset.edgeId = edgeId;
       block.dataset.len = String(e.len);
       block.dataset.color = e.claimedBy || e.color.name;
+      block.dataset.routeColor = e.color.name;
       block.dataset.from = cities[e.u].name;
       block.dataset.to = cities[e.v].name;
       block.dataset.claimed = e.claimedBy ? "true" : "false";
+      block.dataset.affordable = affordable ? "true" : "false";
       if (e.claimedBy) {
         block.classList.add("route-claimed", "route-disabled");
+        block.style.pointerEvents = "none";
+      } else if (!affordable) {
+        block.classList.add("route-disabled");
         block.style.pointerEvents = "none";
       }
       block.setAttribute("transform", `rotate(${ang} ${p.x} ${p.y})`);
@@ -745,14 +757,20 @@ const stageInner = document.querySelector(".stage-inner");
 const ticketPileEl = document.getElementById("ticketPile");
 const deckBackEl = document.getElementById("deckBack");
 const playersListEl = document.getElementById("playersList");
+const colorModalEl = document.getElementById("colorModal");
+const colorOptionsEl = document.getElementById("colorOptions");
+const colorSubmitEl = document.getElementById("colorSubmit");
+const colorCancelEl = document.getElementById("colorCancel");
 let currentMap = null;
 let selectedEdgeId = null;
+let selectedEdgeMeta = null;
+let pendingColor = null;
 let ticketCounts = Object.fromEntries(CARD_ORDER.map(k => [k, 0]));
 let ws = null;
 
 function render() {
   if (!currentMap) return;
-  renderSvg(svg, currentMap, { labels: true });
+  renderSvg(svg, currentMap, { labels: true, tickets: ticketCounts });
   wireRoutes();
   selectedEdgeId = null;
   submitBtn.disabled = true;
@@ -792,6 +810,25 @@ function renderTicketPile() {
   }
 }
 
+function canAffordTickets(tickets, routeColor, len) {
+  const wild = tickets.rainbow || 0;
+  if (routeColor === "gray") {
+    const colors = CARD_ORDER.filter((c) => c !== "rainbow");
+    return colors.some((c) => (tickets[c] || 0) + wild >= len);
+  }
+  const have = (tickets[routeColor] || 0) + wild;
+  return have >= len;
+}
+
+function possibleColors(tickets, routeColor, len) {
+  const wild = tickets.rainbow || 0;
+  if (routeColor === "gray") {
+    const colors = CARD_ORDER.filter((c) => c !== "rainbow");
+    return colors.filter((c) => (tickets[c] || 0) + wild >= len);
+  }
+  return (tickets[routeColor] || 0) + wild >= len ? [routeColor] : [];
+}
+
 function renderPlayers(players, currentTurn) {
   if (!playersListEl) return;
   playersListEl.innerHTML = "";
@@ -802,7 +839,8 @@ function renderPlayers(players, currentTurn) {
     swatch.className = "player-swatch";
     swatch.style.background = p.hex || p.color;
     const label = document.createElement("div");
-    label.textContent = p.name || p.color;
+    const total = p.ticketTotal ?? 0;
+    label.textContent = `${p.name || p.color} (${total})`;
     row.appendChild(swatch);
     row.appendChild(label);
     playersListEl.appendChild(row);
@@ -811,12 +849,16 @@ function renderPlayers(players, currentTurn) {
 
 function applyState(state) {
   if (!state) return;
+  ticketCounts = { ...Object.fromEntries(CARD_ORDER.map(k => [k, 0])), ...(state.tickets || {}) };
   currentMap = { cities: state.cities || [], edges: state.edges || [] };
   render();
   drawFaceUp(state.faceUp || []);
-  ticketCounts = { ...Object.fromEntries(CARD_ORDER.map(k => [k, 0])), ...(state.tickets || {}) };
   renderTicketPile();
-  renderPlayers(state.players || [], state.currentTurn ?? 0);
+  const players = (state.players || []).map((p, idx) => ({
+    ...p,
+    ticketTotal: (state.ticketTotals || [])[idx] || 0,
+  }));
+  renderPlayers(players, state.currentTurn ?? 0);
 }
 
 function connectSocket() {
@@ -866,6 +908,7 @@ function wireRoutes() {
 
   routes.forEach((el) => {
     if (el.dataset.claimed === "true") return;
+    if (el.dataset.affordable !== "true") return;
     el.addEventListener("mouseenter", () => {
       const edgeId = el.dataset.edgeId;
       setClassForEdge(edgeId, "route-hover", true);
@@ -879,7 +922,14 @@ function wireRoutes() {
       const edgeId = el.dataset.edgeId;
       setClassForEdge(edgeId, "route-selected", true);
       selectedEdgeId = edgeId;
-      submitBtn.disabled = el.dataset.claimed === "true";
+      selectedEdgeMeta = {
+        edgeId,
+        routeColor: el.dataset.routeColor || el.dataset.color,
+        len: Number(el.dataset.len),
+        claimed: el.dataset.claimed === "true",
+        affordable: el.dataset.affordable === "true",
+      };
+      submitBtn.disabled = el.dataset.claimed === "true" || el.dataset.affordable !== "true";
       const from = el.dataset.from;
       const to = el.dataset.to;
       const len = el.dataset.len;
@@ -894,14 +944,63 @@ svg.addEventListener("click", () => {
   svg.querySelectorAll(".route-selected").forEach(r => r.classList.remove("route-selected"));
   routeInfo.textContent = "Click a route to see details";
   selectedEdgeId = null;
+  selectedEdgeMeta = null;
   submitBtn.disabled = true;
 });
 
 submitBtn.addEventListener("click", () => {
-  if (!selectedEdgeId) return;
-  if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({ type: "submit_route", edgeId: selectedEdgeId }));
+  if (!selectedEdgeMeta || !selectedEdgeMeta.affordable || selectedEdgeMeta.claimed) return;
+  const colors = possibleColors(ticketCounts, selectedEdgeMeta.routeColor, selectedEdgeMeta.len);
+  if (colors.length <= 0) return;
+  if (colors.length === 1) {
+    sendSubmitRoute(selectedEdgeMeta.edgeId, colors[0]);
+    return;
   }
+  openColorModal(colors);
+});
+
+function sendSubmitRoute(edgeId, color) {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: "submit_route", edgeId, color }));
+  }
+}
+
+function openColorModal(colors) {
+  pendingColor = null;
+  colorOptionsEl.innerHTML = "";
+  colors.forEach((c) => {
+    const opt = document.createElement("div");
+    opt.className = "modal-option";
+    opt.dataset.color = c;
+    const img = document.createElement("img");
+    img.src = `img/${c}.png`;
+    img.alt = `${c} ticket`;
+    opt.appendChild(img);
+    opt.addEventListener("click", () => {
+      colorOptionsEl.querySelectorAll(".modal-option").forEach(el => el.classList.remove("selected"));
+      opt.classList.add("selected");
+      pendingColor = c;
+      colorSubmitEl.disabled = false;
+    });
+    colorOptionsEl.appendChild(opt);
+  });
+  colorSubmitEl.disabled = true;
+  colorModalEl.classList.remove("hidden");
+}
+
+function closeColorModal() {
+  pendingColor = null;
+  colorModalEl.classList.add("hidden");
+}
+
+colorCancelEl.addEventListener("click", () => {
+  closeColorModal();
+});
+
+colorSubmitEl.addEventListener("click", () => {
+  if (!pendingColor || !selectedEdgeMeta) return;
+  sendSubmitRoute(selectedEdgeMeta.edgeId, pendingColor);
+  closeColorModal();
 });
 
 

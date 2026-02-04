@@ -522,14 +522,14 @@ function initGame() {
   const deck = buildDeck();
   shuffleInPlace(rng, deck);
   const faceUp = deck.slice(0, 5);
-  const tickets = Object.fromEntries(CARD_ORDER.map(k => [k, 0]));
+  const ticketsByPlayer = PLAYERS.map(() => Object.fromEntries(CARD_ORDER.map(k => [k, 0])));
   const currentTurn = Math.floor(rng() * PLAYERS.length);
   return {
     map,
     deck,
     deckIndex: 5,
     faceUp,
-    tickets,
+    ticketsByPlayer,
     players: PLAYERS,
     currentTurn,
   };
@@ -541,12 +541,26 @@ function advanceTurn() {
   game.currentTurn = (game.currentTurn + 1) % game.players.length;
 }
 
+function canAffordTickets(tickets, routeColor, len) {
+  const wild = tickets.rainbow || 0;
+  if (routeColor === "gray") {
+    const colors = CARD_ORDER.filter((c) => c !== "rainbow");
+    return colors.some((c) => (tickets[c] || 0) + wild >= len);
+  }
+  const have = (tickets[routeColor] || 0) + wild;
+  return have >= len;
+}
+
 function getState() {
+  const ticketTotals = game.ticketsByPlayer.map((counts) =>
+    Object.values(counts).reduce((a, b) => a + b, 0)
+  );
   return {
     cities: game.map.cities,
     edges: game.map.edges,
     faceUp: game.faceUp,
-    tickets: game.tickets,
+    tickets: game.ticketsByPlayer[game.currentTurn] || {},
+    ticketTotals,
     players: game.players,
     currentTurn: game.currentTurn,
   };
@@ -578,7 +592,8 @@ wss.on("connection", (ws) => {
       if (idx < 0 || idx >= game.faceUp.length) return;
       const color = game.faceUp[idx];
       if (!color) return;
-      game.tickets[color] = (game.tickets[color] || 0) + 1;
+      const p = game.currentTurn;
+      game.ticketsByPlayer[p][color] = (game.ticketsByPlayer[p][color] || 0) + 1;
       if (game.deckIndex < game.deck.length) {
         game.faceUp[idx] = game.deck[game.deckIndex++];
       } else {
@@ -592,7 +607,8 @@ wss.on("connection", (ws) => {
     if (msg.type === "draw_deck") {
       if (game.deckIndex >= game.deck.length) return;
       const color = game.deck[game.deckIndex++];
-      game.tickets[color] = (game.tickets[color] || 0) + 1;
+      const p = game.currentTurn;
+      game.ticketsByPlayer[p][color] = (game.ticketsByPlayer[p][color] || 0) + 1;
       advanceTurn();
       broadcastState();
       return;
@@ -600,9 +616,15 @@ wss.on("connection", (ws) => {
 
     if (msg.type === "submit_route") {
       const edgeId = String(msg.edgeId || "");
+      const chosen = String(msg.color || "");
       if (!edgeId) return;
       const edge = game.map.edges.find((e) => keyEdge(e.u, e.v) === edgeId);
       if (!edge || edge.claimedBy) return;
+      const p = game.currentTurn;
+      if (edge.color.name !== "gray" && chosen !== edge.color.name) return;
+      if (edge.color.name === "gray" && !chosen) return;
+      const canClaim = canAffordTickets(game.ticketsByPlayer[p], chosen, edge.len);
+      if (!canClaim) return;
       const player = game.players[game.currentTurn];
       edge.claimedBy = player.color;
       advanceTurn();
