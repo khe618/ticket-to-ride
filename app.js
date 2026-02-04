@@ -699,6 +699,11 @@ const svg = document.getElementById("mapSvg");
 const routeInfo = document.getElementById("routeInfo");
 const regenBtn = document.getElementById("regenBtn");
 const submitBtn = document.getElementById("submitBtn");
+const faceUpEl = document.getElementById("faceUpCards");
+const gameBox = document.getElementById("gameBox");
+const stageInner = document.querySelector(".stage-inner");
+const ticketPileEl = document.getElementById("ticketPile");
+const deckBackEl = document.getElementById("deckBack");
 const DEFAULTS = {
   seed: "demo-seed-123",
   nCities: 35,
@@ -728,6 +733,34 @@ const CLAIM_COLORS = [
   { name: "claim-blue", hex: "#0000cc" },
 ];
 
+const CARD_COUNTS = {
+  red: 12,
+  blue: 12,
+  green: 12,
+  yellow: 12,
+  black: 12,
+  white: 12,
+  orange: 12,
+  pink: 12,
+  rainbow: 14,
+};
+
+const CARD_ORDER = [
+  "red",
+  "blue",
+  "green",
+  "yellow",
+  "black",
+  "white",
+  "orange",
+  "pink",
+  "rainbow",
+];
+
+let deck = [];
+let deckIndex = 0;
+let ticketCounts = Object.fromEntries(CARD_ORDER.map(k => [k, 0]));
+
 function getParams() {
   return {
     nCities: DEFAULTS.nCities,
@@ -756,10 +789,100 @@ function regenerate() {
   try {
     currentMap = generateMap(seedStr, params);
     render();
+    renderCards(seedStr);
+    renderTicketPile();
   } catch (err) {
     svg.innerHTML = "";
   }
 }
+
+function buildDeck() {
+  const deck = [];
+  for (const [name, count] of Object.entries(CARD_COUNTS)) {
+    for (let i = 0; i < count; i++) deck.push(name);
+  }
+  return deck;
+}
+
+function renderCards(seedStr) {
+  const rng = makeRng(`${seedStr}-cards`);
+  deck = buildDeck();
+  shuffleInPlace(rng, deck);
+  deckIndex = 0;
+  const faceUp = [];
+  for (let i = 0; i < 5; i++) {
+    if (deckIndex < deck.length) faceUp.push(deck[deckIndex++]);
+  }
+  ticketCounts = Object.fromEntries(CARD_ORDER.map(k => [k, 0]));
+  faceUpEl.innerHTML = "";
+  for (const name of faceUp) {
+    const img = document.createElement("img");
+    img.className = "card";
+    img.alt = `${name} card`;
+    img.src = `img/${name}.png`;
+    img.dataset.color = name;
+    faceUpEl.appendChild(img);
+  }
+}
+
+function drawFaceUp(faceUp) {
+  faceUpEl.innerHTML = "";
+  for (const name of faceUp) {
+    const img = document.createElement("img");
+    img.className = "card";
+    img.alt = `${name} card`;
+    img.src = `img/${name}.png`;
+    img.dataset.color = name;
+    faceUpEl.appendChild(img);
+  }
+}
+
+function renderTicketPile() {
+  ticketPileEl.innerHTML = "";
+  for (const color of CARD_ORDER) {
+    const count = ticketCounts[color] || 0;
+    if (count <= 0) continue;
+    const item = document.createElement("div");
+    item.className = "ticket-item";
+    const img = document.createElement("img");
+    img.src = `img/${color}.png`;
+    img.alt = `${color} ticket`;
+    item.appendChild(img);
+    const badge = document.createElement("div");
+    badge.className = "ticket-count";
+    badge.textContent = String(count);
+    item.appendChild(badge);
+    ticketPileEl.appendChild(item);
+  }
+}
+
+faceUpEl.addEventListener("click", (e) => {
+  const target = e.target;
+  if (!(target instanceof HTMLImageElement)) return;
+  const color = target.dataset.color;
+  if (!color) return;
+  ticketCounts[color] = (ticketCounts[color] || 0) + 1;
+
+  const imgs = Array.from(faceUpEl.querySelectorAll("img"));
+  const idx = imgs.indexOf(target);
+  const current = imgs.map(img => img.dataset.color);
+  if (idx !== -1) {
+    if (deckIndex < deck.length) {
+      current[idx] = deck[deckIndex++];
+    } else {
+      current.splice(idx, 1);
+    }
+  }
+  drawFaceUp(current);
+  renderTicketPile();
+});
+
+deckBackEl.addEventListener("click", () => {
+  if (deckIndex >= deck.length) return;
+  const color = deck[deckIndex++];
+  ticketCounts[color] = (ticketCounts[color] || 0) + 1;
+  renderTicketPile();
+});
 
 function wireRoutes() {
   const routes = svg.querySelectorAll(".route-color, .route-hit");
@@ -840,3 +963,23 @@ regenBtn.addEventListener("click", () => {
 });
 
 regenerate();
+
+if (typeof ResizeObserver !== "undefined") {
+  const ro = new ResizeObserver(() => updateCardSizing());
+  if (gameBox) ro.observe(gameBox);
+  updateCardSizing();
+} else {
+  window.addEventListener("resize", updateCardSizing);
+  updateCardSizing();
+}
+function updateCardSizing() {
+  if (!gameBox || !stageInner) return;
+  const rect = gameBox.getBoundingClientRect();
+  const size = Math.max(110, Math.min(220, rect.width * 0.18));
+  const gap = Math.max(12, Math.min(28, size * 0.14));
+  stageInner.style.setProperty("--card-size", `${size.toFixed(1)}px`);
+  stageInner.style.setProperty("--card-gap", `${gap.toFixed(1)}px`);
+  const ticketGap = 10;
+  const ticketSize = Math.max(48, Math.min(110, (rect.width - ticketGap * 8) / 9));
+  stageInner.style.setProperty("--ticket-size", `${ticketSize.toFixed(1)}px`);
+}

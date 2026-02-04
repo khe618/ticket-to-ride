@@ -16,9 +16,6 @@
     </div>
     <div class="stage">
       <div class="stage-inner">
-        <div id="gameBox" class="game-box">
-          <svg id="mapSvg" viewBox="0 0 1000 1000" aria-label="Route map"></svg>
-        </div>
         <div class="legend" aria-label="Scoring legend">
           <div class="legend-title">Route Scoring</div>
           <div class="legend-row"><div class="legend-blocks"><span class="legend-block"></span></div><div class="legend-score">1</div></div>
@@ -27,6 +24,17 @@
           <div class="legend-row"><div class="legend-blocks"><span class="legend-block"></span><span class="legend-block"></span><span class="legend-block"></span><span class="legend-block"></span></div><div class="legend-score">7</div></div>
           <div class="legend-row"><div class="legend-blocks"><span class="legend-block"></span><span class="legend-block"></span><span class="legend-block"></span><span class="legend-block"></span><span class="legend-block"></span></div><div class="legend-score">10</div></div>
           <div class="legend-row"><div class="legend-blocks"><span class="legend-block"></span><span class="legend-block"></span><span class="legend-block"></span><span class="legend-block"></span><span class="legend-block"></span><span class="legend-block"></span></div><div class="legend-score">16</div></div>
+        </div>
+        <div id="gameBox" class="game-box">
+          <svg id="mapSvg" viewBox="0 0 1000 1000" aria-label="Route map"></svg>
+        </div>
+        <div class="cards" aria-label="Card display">
+          <img id="deckBack" class="card" src="img/back.png" alt="Deck back" />
+          <div id="faceUpCards" class="face-up"></div>
+        </div>
+      </div>
+      <div class="ticket-area" aria-label="Your tickets">
+        <div id="ticketPile" class="ticket-pile"></div>
       </div>
     </div>
   </div>
@@ -34,4 +42,3 @@
   <script src="app.js"></script>
 </body>
 </html>
-

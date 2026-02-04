@@ -5,6 +5,7 @@ body {
     radial-gradient(1200px 800px at 20% 10%, rgba(255, 255, 255, 0.25) 0%, rgba(255,255,255,0) 60%),
     linear-gradient(135deg, #d7b88a 0%, #caa070 45%, #b88a5a 100%);
   color: #3a2a1a;
+  user-select: none;
 }
 .wrap {
   min-height: 100vh;
@@ -65,11 +66,18 @@ body {
   place-items: center;
   padding: 18px;
 }
+.stage {
+  gap: 16px;
+}
 .stage-inner {
   display: grid;
-  grid-template-columns: min(86vmin, 1200px) auto;
   align-items: start;
-  gap: 14px;
+  justify-items: start;
+  gap: 16px;
+  grid-template-columns: auto min(86vmin, 1200px) auto;
+  --card-size: 160px;
+  --card-gap: 22px;
+  --ticket-size: clamp(80px, 9vmin, 140px);
 }
 .game-box {
   width: min(86vmin, 1200px);
@@ -127,6 +135,72 @@ body {
   font-weight: 700;
   text-align: right;
   font-variant-numeric: tabular-nums;
+}
+.cards {
+  align-self: stretch;
+  height: 100%;
+  display: grid;
+  grid-template-rows: 1.6fr repeat(5, 1fr);
+  align-items: center;
+  gap: var(--card-gap);
+  min-width: calc(var(--card-size) + 20px);
+}
+.face-up {
+  display: contents;
+}
+.card {
+  width: var(--card-size);
+  height: auto;
+  display: block;
+  border-radius: 10px;
+  box-shadow: 0 8px 16px rgba(60, 40, 20, 0.35);
+  justify-self: center;
+}
+.ticket-area {
+  width: min(86vmin, 1200px);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.ticket-pile {
+  display: grid;
+  grid-template-columns: repeat(9, 1fr);
+  gap: 10px;
+  align-items: start;
+}
+.ticket-item {
+  position: relative;
+  width: 100%;
+  height: calc(var(--ticket-size) * 1.4);
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  justify-self: center;
+  opacity: 0.95;
+}
+.ticket-item.empty {
+  opacity: 0.35;
+  filter: grayscale(0.5);
+}
+.ticket-item img {
+  width: 100%;
+  height: auto;
+  transform: rotate(-90deg);
+  transform-origin: center;
+  border-radius: 10px;
+  box-shadow: 0 6px 12px rgba(60, 40, 20, 0.35);
+}
+.ticket-count {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  background: rgba(20, 12, 6, 0.85);
+  color: #fff3e2;
+  font-size: 12px;
+  font-weight: 800;
+  padding: 2px 6px;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,0.2);
 }
 #mapSvg {
   width: 100%;
