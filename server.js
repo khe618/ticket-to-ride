@@ -38,6 +38,7 @@ const ROUTE_COLORS = [
 ];
 const GRAY = { name: "gray", hex: "#95a5a6" };
 
+
 const CARD_COUNTS = {
   red: 12,
   blue: 12,
@@ -49,6 +50,8 @@ const CARD_COUNTS = {
   pink: 12,
   rainbow: 14,
 };
+
+
 
 const CARD_ORDER = [
   "red",
@@ -530,15 +533,20 @@ function initGame() {
     deckIndex: 5,
     faceUp,
     ticketsByPlayer,
+    discard: [],
     players: PLAYERS,
     currentTurn,
+    turnDrawCount: 0,
   };
 }
 
 let game = initGame();
+// enforce rainbow reset rule on initial face-up draw
+maybeResetFaceUp();
 
 function advanceTurn() {
   game.currentTurn = (game.currentTurn + 1) % game.players.length;
+  game.turnDrawCount = 0;
 }
 
 function canAffordTickets(tickets, routeColor, len) {
@@ -551,18 +559,68 @@ function canAffordTickets(tickets, routeColor, len) {
   return have >= len;
 }
 
+function reshuffleIfNeeded() {
+  if (game.deckIndex < game.deck.length) return;
+  if (game.discard.length === 0) return;
+  game.deck = [...game.discard];
+  game.discard = [];
+  shuffleInPlace(rng, game.deck);
+  game.deckIndex = 0;
+}
+
+function drawFromDeck() {
+  if (game.deckIndex >= game.deck.length) {
+    reshuffleIfNeeded();
+  }
+  if (game.deckIndex >= game.deck.length) return null;
+  return game.deck[game.deckIndex++];
+}
+
+function maybeResetFaceUp() {
+  const rainbowCount = game.faceUp.filter((c) => c === "rainbow").length;
+  const remaining = game.deck.length - game.deckIndex;
+  if (rainbowCount < 3 || remaining < 5) return;
+  for (const c of game.faceUp) game.discard.push(c);
+  const newFaceUp = [];
+  for (let i = 0; i < 5; i++) {
+    const next = drawFromDeck();
+    if (!next) break;
+    newFaceUp.push(next);
+  }
+  game.faceUp = newFaceUp;
+  maybeResetFaceUp();
+}
+
+function spendTickets(playerIdx, color, len) {
+  const pile = game.ticketsByPlayer[playerIdx];
+  const wild = pile.rainbow || 0;
+  const base = pile[color] || 0;
+  const useColor = Math.min(base, len);
+  const useWild = len - useColor;
+  if (useWild > wild) return false;
+  pile[color] = base - useColor;
+  pile.rainbow = wild - useWild;
+  for (let i = 0; i < useColor; i++) game.discard.push(color);
+  for (let i = 0; i < useWild; i++) game.discard.push("rainbow");
+  return true;
+}
+
 function getState() {
   const ticketTotals = game.ticketsByPlayer.map((counts) =>
     Object.values(counts).reduce((a, b) => a + b, 0)
   );
+  const deckRemaining = Math.max(0, (game.deck.length - game.deckIndex) + game.discard.length);
   return {
     cities: game.map.cities,
     edges: game.map.edges,
     faceUp: game.faceUp,
     tickets: game.ticketsByPlayer[game.currentTurn] || {},
     ticketTotals,
+    discardCount: game.discard.length,
+    deckRemaining,
     players: game.players,
     currentTurn: game.currentTurn,
+    turnDrawCount: game.turnDrawCount,
   };
 }
 
@@ -592,24 +650,36 @@ wss.on("connection", (ws) => {
       if (idx < 0 || idx >= game.faceUp.length) return;
       const color = game.faceUp[idx];
       if (!color) return;
+      if (game.turnDrawCount >= 2) return;
+      if (color === "rainbow" && game.turnDrawCount > 0) return;
       const p = game.currentTurn;
       game.ticketsByPlayer[p][color] = (game.ticketsByPlayer[p][color] || 0) + 1;
-      if (game.deckIndex < game.deck.length) {
-        game.faceUp[idx] = game.deck[game.deckIndex++];
+      const next = drawFromDeck();
+      if (next) {
+        game.faceUp[idx] = next;
       } else {
         game.faceUp.splice(idx, 1);
       }
-      advanceTurn();
+      maybeResetFaceUp();
+      if (color === "rainbow") {
+        advanceTurn();
+      } else {
+        game.turnDrawCount += 1;
+        if (game.turnDrawCount >= 2) advanceTurn();
+      }
       broadcastState();
       return;
     }
 
     if (msg.type === "draw_deck") {
-      if (game.deckIndex >= game.deck.length) return;
-      const color = game.deck[game.deckIndex++];
+      const color = drawFromDeck();
+      if (!color) return;
+      if (game.turnDrawCount >= 2) return;
       const p = game.currentTurn;
       game.ticketsByPlayer[p][color] = (game.ticketsByPlayer[p][color] || 0) + 1;
-      advanceTurn();
+      game.turnDrawCount += 1;
+      if (game.turnDrawCount >= 2) advanceTurn();
+      maybeResetFaceUp();
       broadcastState();
       return;
     }
@@ -625,6 +695,7 @@ wss.on("connection", (ws) => {
       if (edge.color.name === "gray" && !chosen) return;
       const canClaim = canAffordTickets(game.ticketsByPlayer[p], chosen, edge.len);
       if (!canClaim) return;
+      if (!spendTickets(p, chosen, edge.len)) return;
       const player = game.players[game.currentTurn];
       edge.claimedBy = player.color;
       advanceTurn();

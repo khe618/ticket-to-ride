@@ -767,6 +767,7 @@ let selectedEdgeMeta = null;
 let pendingColor = null;
 let ticketCounts = Object.fromEntries(CARD_ORDER.map(k => [k, 0]));
 let ws = null;
+let turnDrawCount = 0;
 
 function render() {
   if (!currentMap) return;
@@ -782,11 +783,15 @@ function drawFaceUp(faceUp) {
   for (let i = 0; i < faceUp.length; i++) {
     const name = faceUp[i];
     const img = document.createElement("img");
-    img.className = "card";
+    img.className = "card clickable";
     img.alt = `${name} card`;
     img.src = `img/${name}.png`;
     img.dataset.color = name;
     img.dataset.index = String(i);
+    if (name === "rainbow" && turnDrawCount > 0) {
+      img.classList.add("disabled");
+      img.classList.remove("clickable");
+    }
     faceUpEl.appendChild(img);
   }
 }
@@ -824,7 +829,14 @@ function possibleColors(tickets, routeColor, len) {
   const wild = tickets.rainbow || 0;
   if (routeColor === "gray") {
     const colors = CARD_ORDER.filter((c) => c !== "rainbow");
-    return colors.filter((c) => (tickets[c] || 0) + wild >= len);
+    const nonWildTotal = colors.reduce((a, c) => a + (tickets[c] || 0), 0);
+    if (nonWildTotal === 0 && wild >= len) return ["red"];
+    const options = colors.filter((c) => {
+      const base = tickets[c] || 0;
+      if (base <= 0) return false;
+      return base + wild >= len;
+    });
+    return options;
   }
   return (tickets[routeColor] || 0) + wild >= len ? [routeColor] : [];
 }
@@ -849,6 +861,7 @@ function renderPlayers(players, currentTurn) {
 
 function applyState(state) {
   if (!state) return;
+  turnDrawCount = state.turnDrawCount || 0;
   ticketCounts = { ...Object.fromEntries(CARD_ORDER.map(k => [k, 0])), ...(state.tickets || {}) };
   currentMap = { cities: state.cities || [], edges: state.edges || [] };
   render();
@@ -859,6 +872,11 @@ function applyState(state) {
     ticketTotal: (state.ticketTotals || [])[idx] || 0,
   }));
   renderPlayers(players, state.currentTurn ?? 0);
+  if (deckBackEl) {
+    const empty = (state.deckRemaining ?? 1) <= 0;
+    deckBackEl.classList.toggle("disabled", empty);
+    deckBackEl.classList.toggle("clickable", !empty);
+  }
 }
 
 function connectSocket() {
@@ -880,6 +898,7 @@ function connectSocket() {
 faceUpEl.addEventListener("click", (e) => {
   const target = e.target;
   if (!(target instanceof HTMLImageElement)) return;
+  if (target.classList.contains("disabled")) return;
   const idx = Number(target.dataset.index);
   if (!Number.isFinite(idx)) return;
   if (ws && ws.readyState === WebSocket.OPEN) {
@@ -888,6 +907,7 @@ faceUpEl.addEventListener("click", (e) => {
 });
 
 deckBackEl.addEventListener("click", () => {
+  if (deckBackEl.classList.contains("disabled")) return;
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ type: "draw_deck" }));
   }
