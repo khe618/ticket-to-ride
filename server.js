@@ -65,6 +65,15 @@ const CARD_ORDER = [
   "rainbow",
 ];
 
+const ROUTE_POINTS = {
+  1: 1,
+  2: 2,
+  3: 4,
+  4: 7,
+  5: 10,
+  6: 16,
+};
+
 const PLAYERS = [
   { name: "Red", color: "red", hex: "#cc0000" },
   { name: "Green", color: "green", hex: "#008000" },
@@ -609,6 +618,15 @@ function getState() {
   const ticketTotals = game.ticketsByPlayer.map((counts) =>
     Object.values(counts).reduce((a, b) => a + b, 0)
   );
+  const scores = game.players.map((p) => {
+    let total = 0;
+    for (const e of game.map.edges) {
+      if (e.claimedBy === p.color) {
+        total += ROUTE_POINTS[e.len] || 0;
+      }
+    }
+    return total;
+  });
   const deckRemaining = Math.max(0, (game.deck.length - game.deckIndex) + game.discard.length);
   return {
     cities: game.map.cities,
@@ -618,6 +636,7 @@ function getState() {
     ticketTotals,
     discardCount: game.discard.length,
     deckRemaining,
+    scores,
     players: game.players,
     currentTurn: game.currentTurn,
     turnDrawCount: game.turnDrawCount,

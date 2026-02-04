@@ -850,11 +850,26 @@ function renderPlayers(players, currentTurn) {
     const swatch = document.createElement("div");
     swatch.className = "player-swatch";
     swatch.style.background = p.hex || p.color;
-    const label = document.createElement("div");
+    const info = document.createElement("div");
+    info.className = "player-info";
+    const name = document.createElement("div");
+    name.className = "player-name";
+    const score = p.score ?? 0;
+    name.textContent = `${p.name || p.color} — ${score} pts`;
+    const tickets = document.createElement("div");
+    tickets.className = "player-tickets";
+    const img = document.createElement("img");
+    img.src = "img/back.png";
+    img.alt = "Tickets";
     const total = p.ticketTotal ?? 0;
-    label.textContent = `${p.name || p.color} (${total})`;
+    const count = document.createElement("span");
+    count.textContent = String(total);
+    tickets.appendChild(img);
+    tickets.appendChild(count);
+    info.appendChild(name);
+    info.appendChild(tickets);
     row.appendChild(swatch);
-    row.appendChild(label);
+    row.appendChild(info);
     playersListEl.appendChild(row);
   });
 }
@@ -870,6 +885,7 @@ function applyState(state) {
   const players = (state.players || []).map((p, idx) => ({
     ...p,
     ticketTotal: (state.ticketTotals || [])[idx] || 0,
+    score: (state.scores || [])[idx] || 0,
   }));
   renderPlayers(players, state.currentTurn ?? 0);
   if (deckBackEl) {
