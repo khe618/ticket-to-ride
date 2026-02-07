@@ -617,6 +617,10 @@ function renderSvg(svg, map, opts) {
     under.setAttribute("d", pathData);
     under.setAttribute("class", "route route-under");
     under.setAttribute("stroke-width", width + 3);
+    if (e.claimedBy) {
+      under.classList.add("route-under-claimed");
+      under.setAttribute("stroke-width", width + 5);
+    }
     routeGroup.appendChild(under);
 
     const color = document.createElementNS("http://www.w3.org/2000/svg", "path");
@@ -729,11 +733,13 @@ const CLAIM_COLORS = [
   { name: "claim-red", hex: "#cc0000" },
   { name: "claim-green", hex: "#008000" },
   { name: "claim-blue", hex: "#0000cc" },
+  { name: "claim-yellow", hex: "#b58900" },
 ];
 const CLAIM_COLOR_MAP = {
   red: "#cc0000",
   green: "#008000",
   blue: "#0000cc",
+  yellow: "#b58900",
 };
 
 const CARD_ORDER = [

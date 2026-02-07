@@ -360,6 +360,10 @@ img {
 .route-selected { filter: drop-shadow(0 0 14px rgba(255,255,255,0.7)); }
 .route-selected.route { stroke-width: calc(var(--route-w, 6px) + 2px); }
 .route-under { stroke: rgba(0,0,0,0.55); pointer-events: none; cursor: default; }
+.route-under.route-under-claimed {
+  stroke: rgba(10, 6, 3, 0.95);
+  filter: drop-shadow(0 1px 0 rgba(0,0,0,0.65));
+}
 .route-seg {
   stroke: rgba(0,0,0,0.55);
   stroke-width: 1.2;

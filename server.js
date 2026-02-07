@@ -78,6 +78,7 @@ const PLAYERS = [
   { name: "Red", color: "red", hex: "#cc0000" },
   { name: "Green", color: "green", hex: "#008000" },
   { name: "Blue", color: "blue", hex: "#0000cc" },
+  { name: "Yellow", color: "yellow", hex: "#b58900" },
 ];
 
 function rng() {
