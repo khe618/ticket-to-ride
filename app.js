@@ -918,26 +918,34 @@ function appendLog(entry) {
   if (!logListEl || !entry) return;
   const item = document.createElement("div");
   item.className = "log-item";
+
   const text = document.createElement("span");
   text.textContent = entry.message || `${entry.playerName} took `;
   item.appendChild(text);
-  if (entry.newline) {
-    item.appendChild(document.createElement("br"));
-  }
+
+  const cardsWrap = document.createElement("span");
+  cardsWrap.className = "log-cards";
+
   if (entry.cards && Array.isArray(entry.cards)) {
     entry.cards.forEach((c) => {
       const img = document.createElement("img");
       img.src = `img/${c}.png`;
       img.alt = `${c} card`;
-      item.appendChild(img);
+      cardsWrap.appendChild(img);
     });
   } else {
     const img = document.createElement("img");
     const color = entry.faceDown ? "back" : entry.cardColor;
     img.src = `img/${color}.png`;
     img.alt = `${color} card`;
-    item.appendChild(img);
+    cardsWrap.appendChild(img);
   }
+
+  if (entry.newline) {
+    item.classList.add("log-item-stacked");
+  }
+  item.appendChild(cardsWrap);
+
   logListEl.prepend(item);
 }
 
