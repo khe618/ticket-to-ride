@@ -625,7 +625,7 @@ function renderSvg(svg, map, opts) {
     color.setAttribute("stroke", strokeHex);
     color.setAttribute("stroke-width", width);
     color.style.setProperty("--route-w", `${width}px`);
-    const edgeId = `${e.u}-${e.v}`;
+    const edgeId = keyEdge(e.u, e.v);
     color.dataset.edgeId = edgeId;
     color.dataset.len = String(e.len);
     color.dataset.color = e.claimedBy || e.color.name;
@@ -638,7 +638,7 @@ function renderSvg(svg, map, opts) {
       color.classList.add("route-claimed", "route-disabled");
       color.style.pointerEvents = "none";
     } else if (!affordable) {
-      color.classList.add("route-disabled");
+      color.classList.add("route-disabled", "dim");
       color.style.pointerEvents = "none";
     }
     routeGroup.appendChild(color);
@@ -685,7 +685,7 @@ function renderSvg(svg, map, opts) {
         block.classList.add("route-claimed", "route-disabled");
         block.style.pointerEvents = "none";
       } else if (!affordable) {
-        block.classList.add("route-disabled");
+        block.classList.add("route-disabled", "dim");
         block.style.pointerEvents = "none";
       }
       block.setAttribute("transform", `rotate(${ang} ${p.x} ${p.y})`);
@@ -757,6 +757,7 @@ const stageInner = document.querySelector(".stage-inner");
 const ticketPileEl = document.getElementById("ticketPile");
 const deckBackEl = document.getElementById("deckBack");
 const playersListEl = document.getElementById("playersList");
+const logListEl = document.getElementById("logList");
 const colorModalEl = document.getElementById("colorModal");
 const colorOptionsEl = document.getElementById("colorOptions");
 const colorSubmitEl = document.getElementById("colorSubmit");
@@ -775,7 +776,7 @@ function render() {
   wireRoutes();
   selectedEdgeId = null;
   submitBtn.disabled = true;
-  routeInfo.textContent = "Click a route to see details";
+  routeInfo.textContent = "Select a route";
 }
 
 function drawFaceUp(faceUp) {
@@ -907,8 +908,37 @@ function connectSocket() {
     }
     if (msg && msg.type === "state") {
       applyState(msg.payload);
+    } else if (msg && msg.type === "log") {
+      appendLog(msg.payload);
     }
   });
+}
+
+function appendLog(entry) {
+  if (!logListEl || !entry) return;
+  const item = document.createElement("div");
+  item.className = "log-item";
+  const text = document.createElement("span");
+  text.textContent = entry.message || `${entry.playerName} took `;
+  item.appendChild(text);
+  if (entry.newline) {
+    item.appendChild(document.createElement("br"));
+  }
+  if (entry.cards && Array.isArray(entry.cards)) {
+    entry.cards.forEach((c) => {
+      const img = document.createElement("img");
+      img.src = `img/${c}.png`;
+      img.alt = `${c} card`;
+      item.appendChild(img);
+    });
+  } else {
+    const img = document.createElement("img");
+    const color = entry.faceDown ? "back" : entry.cardColor;
+    img.src = `img/${color}.png`;
+    img.alt = `${color} card`;
+    item.appendChild(img);
+  }
+  logListEl.prepend(item);
 }
 
 faceUpEl.addEventListener("click", (e) => {
@@ -968,9 +998,7 @@ function wireRoutes() {
       submitBtn.disabled = el.dataset.claimed === "true" || el.dataset.affordable !== "true";
       const from = el.dataset.from;
       const to = el.dataset.to;
-      const len = el.dataset.len;
-      const color = el.dataset.color;
-      routeInfo.textContent = `${from} — ${to}\nLength: ${len}\nColor: ${color}`;
+      routeInfo.textContent = `${from} — ${to}`;
       e.stopPropagation();
     });
   });
@@ -978,7 +1006,7 @@ function wireRoutes() {
 
 svg.addEventListener("click", () => {
   svg.querySelectorAll(".route-selected").forEach(r => r.classList.remove("route-selected"));
-  routeInfo.textContent = "Click a route to see details";
+  routeInfo.textContent = "Select a route";
   selectedEdgeId = null;
   selectedEdgeMeta = null;
   submitBtn.disabled = true;

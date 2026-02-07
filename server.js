@@ -129,6 +129,12 @@ function segIntersects(p1, p2, q1, q2) {
 
 function keyEdge(a, b) { return a < b ? `${a}-${b}` : `${b}-${a}`; }
 
+function normalizeEdgeId(edgeId) {
+  const parts = edgeId.split("-").map((v) => Number(v));
+  if (parts.length !== 2 || parts.some((n) => !Number.isFinite(n))) return null;
+  return keyEdge(parts[0], parts[1]);
+}
+
 class DSU {
   constructor(n) { this.p = Array.from({length:n}, (_,i)=>i); this.r = Array(n).fill(0); }
   find(x){ while(this.p[x]!==x){ this.p[x]=this.p[this.p[x]]; x=this.p[x]; } return x; }
@@ -650,6 +656,31 @@ function broadcastState() {
   });
 }
 
+function broadcastLog(payload) {
+  const msg = JSON.stringify({
+    type: "log",
+    payload: {
+      ...payload,
+      ts: Date.now(),
+    },
+  });
+  wss.clients.forEach((client) => {
+    if (client.readyState === 1) client.send(msg);
+  });
+}
+
+function ticketsUsedForClaim(playerIdx, color, len) {
+  const pile = game.ticketsByPlayer[playerIdx];
+  const wild = pile.rainbow || 0;
+  const base = pile[color] || 0;
+  const useColor = Math.min(base, len);
+  const useWild = len - useColor;
+  const used = [];
+  for (let i = 0; i < useColor; i++) used.push(color);
+  for (let i = 0; i < useWild; i++) used.push("rainbow");
+  return used;
+}
+
 wss.on("connection", (ws) => {
   ws.send(JSON.stringify({ type: "state", payload: getState() }));
 
@@ -686,6 +717,12 @@ wss.on("connection", (ws) => {
         game.turnDrawCount += 1;
         if (game.turnDrawCount >= 2) advanceTurn();
       }
+      broadcastLog({
+        playerName: game.players[p].name,
+        message: `${game.players[p].name} took `,
+        cards: [color],
+        faceDown: false,
+      });
       broadcastState();
       return;
     }
@@ -699,26 +736,64 @@ wss.on("connection", (ws) => {
       game.turnDrawCount += 1;
       if (game.turnDrawCount >= 2) advanceTurn();
       maybeResetFaceUp();
+      broadcastLog({
+        playerName: game.players[p].name,
+        message: `${game.players[p].name} took `,
+        cards: ["back"],
+        faceDown: true,
+      });
       broadcastState();
       return;
     }
 
     if (msg.type === "submit_route") {
-      const edgeId = String(msg.edgeId || "");
+      const rawEdgeId = String(msg.edgeId || "");
       const chosen = String(msg.color || "");
-      if (!edgeId) return;
+      const edgeId = normalizeEdgeId(rawEdgeId);
+      console.log(`[claim] request edge=${rawEdgeId} color=${chosen} player=${game.players[game.currentTurn].name}`);
+      if (!edgeId) {
+        console.log("[claim] rejected: missing edgeId");
+        return;
+      }
       const edge = game.map.edges.find((e) => keyEdge(e.u, e.v) === edgeId);
-      if (!edge || edge.claimedBy) return;
+      if (!edge) {
+        console.log("[claim] rejected: edge not found");
+        return;
+      }
+      if (edge.claimedBy) {
+        console.log("[claim] rejected: already claimed");
+        return;
+      }
       const p = game.currentTurn;
-      if (edge.color.name !== "gray" && chosen !== edge.color.name) return;
-      if (edge.color.name === "gray" && !chosen) return;
+      if (edge.color.name !== "gray" && chosen !== edge.color.name) {
+        console.log("[claim] rejected: color mismatch");
+        return;
+      }
+      if (edge.color.name === "gray" && !chosen) {
+        console.log("[claim] rejected: missing color for gray route");
+        return;
+      }
       const canClaim = canAffordTickets(game.ticketsByPlayer[p], chosen, edge.len);
-      if (!canClaim) return;
-      if (!spendTickets(p, chosen, edge.len)) return;
+      if (!canClaim) {
+        console.log("[claim] rejected: insufficient tickets");
+        return;
+      }
+      const used = ticketsUsedForClaim(p, chosen, edge.len);
+      if (!spendTickets(p, chosen, edge.len)) {
+        console.log("[claim] rejected: spend failed");
+        return;
+      }
       const player = game.players[game.currentTurn];
       edge.claimedBy = player.color;
+      broadcastLog({
+        playerName: player.name,
+        message: `${player.name} claimed ${game.map.cities[edge.u].name} — ${game.map.cities[edge.v].name} using`,
+        newline: true,
+        cards: used,
+      });
       advanceTurn();
       broadcastState();
+      console.log("[claim] accepted");
     }
   });
 });
