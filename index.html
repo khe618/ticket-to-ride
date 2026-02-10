@@ -7,7 +7,23 @@
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <div class="wrap">
+  <div id="lobbyScreen" class="lobby-screen">
+    <div class="lobby-card">
+      <div class="lobby-title">Ticket to Random Lobby</div>
+      <form id="lobbyJoinForm" class="lobby-join" autocomplete="off">
+        <input id="lobbyNameInput" class="lobby-input" type="text" maxlength="24" placeholder="Enter your name" />
+        <button id="lobbyJoinBtn" class="lobby-btn" type="submit">Join Lobby</button>
+      </form>
+      <div class="lobby-list-wrap" aria-label="Lobby players">
+        <div class="lobby-subtitle">Players</div>
+        <div id="lobbyPlayersList" class="lobby-players-list"></div>
+      </div>
+      <button id="lobbyStartBtn" class="lobby-btn start" type="button" disabled>Start Game</button>
+      <div id="lobbyStatus" class="lobby-status"></div>
+    </div>
+  </div>
+
+  <div id="gameWrap" class="wrap hidden">
     <div class="hud">
       <div class="title">Ticket to Random</div>
       <div id="routeInfo" class="route-info">Select a route</div>

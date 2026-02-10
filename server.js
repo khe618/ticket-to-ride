@@ -74,11 +74,11 @@ const ROUTE_POINTS = {
   6: 16,
 };
 
-const PLAYERS = [
-  { name: "Red", color: "red", hex: "#cc0000" },
-  { name: "Green", color: "green", hex: "#008000" },
-  { name: "Blue", color: "blue", hex: "#0000cc" },
-  { name: "Yellow", color: "yellow", hex: "#b58900" },
+const PLAYER_POOL = [
+  { color: "red", hex: "#cc0000" },
+  { color: "green", hex: "#008000" },
+  { color: "blue", hex: "#0000cc" },
+  { color: "yellow", hex: "#b58900" },
 ];
 
 function rng() {
@@ -536,13 +536,32 @@ function buildDeck() {
   return deck;
 }
 
-function initGame() {
+function sanitizeName(value) {
+  return String(value || '')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .slice(0, 24);
+}
+
+function sanitizeToken(value) {
+  const token = String(value || '').trim();
+  if (!token) return '';
+  if (!/^[A-Za-z0-9_-]{8,128}$/.test(token)) return '';
+  return token;
+}
+
+function pickRandom(arr) {
+  if (!Array.isArray(arr) || arr.length === 0) return null;
+  return arr[Math.floor(rng() * arr.length)] || null;
+}
+
+function initGame(players) {
   const map = generateMap(DEFAULTS);
   const deck = buildDeck();
   shuffleInPlace(rng, deck);
   const faceUp = deck.slice(0, 5);
-  const ticketsByPlayer = PLAYERS.map(() => Object.fromEntries(CARD_ORDER.map(k => [k, 0])));
-  const currentTurn = Math.floor(rng() * PLAYERS.length);
+  const ticketsByPlayer = players.map(() => Object.fromEntries(CARD_ORDER.map((k) => [k, 0])));
+  const currentTurn = Math.floor(rng() * players.length);
   return {
     map,
     deck,
@@ -550,25 +569,126 @@ function initGame() {
     faceUp,
     ticketsByPlayer,
     discard: [],
-    players: PLAYERS,
+    players: players.map((p) => ({ ...p, connected: true })),
     currentTurn,
     turnDrawCount: 0,
   };
 }
 
-let game = initGame();
-// enforce rainbow reset rule on initial face-up draw
-maybeResetFaceUp();
+const lobbyPlayers = [];
+const socketClientIds = new Map();
+const socketsByClientId = new Map();
+let game = null;
+let gameStarted = false;
+
+function addSocketBinding(clientId, ws) {
+  if (!socketsByClientId.has(clientId)) {
+    socketsByClientId.set(clientId, new Set());
+  }
+  socketsByClientId.get(clientId).add(ws);
+}
+
+function removeSocketBinding(clientId, ws) {
+  const set = socketsByClientId.get(clientId);
+  if (!set) return;
+  set.delete(ws);
+  if (set.size === 0) {
+    socketsByClientId.delete(clientId);
+  }
+}
+
+function bindSocketClientId(ws, clientId) {
+  const prev = socketClientIds.get(ws);
+  if (prev === clientId) return prev;
+  if (prev) removeSocketBinding(prev, ws);
+  socketClientIds.set(ws, clientId);
+  addSocketBinding(clientId, ws);
+  return prev;
+}
+
+function unbindSocket(ws) {
+  const prev = socketClientIds.get(ws);
+  if (!prev) return '';
+  removeSocketBinding(prev, ws);
+  socketClientIds.delete(ws);
+  return prev;
+}
+
+function isClientConnected(clientId) {
+  const set = socketsByClientId.get(clientId);
+  return !!(set && set.size > 0);
+}
+
+function getLobbyPlayerIndex(clientId) {
+  return lobbyPlayers.findIndex((p) => p.id === clientId);
+}
+
+function getPlayerIndexForClient(clientId) {
+  if (!gameStarted || !game) return -1;
+  return game.players.findIndex((p) => p.id === clientId);
+}
+
+function getPlayerIndexForSocket(ws) {
+  const clientId = socketClientIds.get(ws);
+  if (!clientId) return -1;
+  return getPlayerIndexForClient(clientId);
+}
+
+function buildLobbyPayload(clientId) {
+  const you = lobbyPlayers.find((p) => p.id === clientId) || null;
+  return {
+    players: lobbyPlayers.map((p) => ({
+      id: p.id,
+      name: p.name,
+      color: p.color,
+      hex: p.hex,
+    })),
+    minPlayers: 2,
+    maxPlayers: PLAYER_POOL.length,
+    canJoin: !gameStarted && !you && lobbyPlayers.length < PLAYER_POOL.length,
+    canStart: !gameStarted && lobbyPlayers.length >= 2,
+    gameStarted,
+    you,
+  };
+}
+
+function sendLobby(ws) {
+  const clientId = socketClientIds.get(ws);
+  const payload = buildLobbyPayload(clientId);
+  ws.send(JSON.stringify({ type: 'lobby', payload }));
+}
+
+function broadcastLobby() {
+  wss.clients.forEach((client) => {
+    if (client.readyState !== 1) return;
+    sendLobby(client);
+  });
+}
+
+function sendError(ws, message) {
+  ws.send(JSON.stringify({ type: 'error', payload: { message } }));
+}
+
+function startGame() {
+  if (gameStarted) return;
+  if (lobbyPlayers.length < 2) return;
+  game = initGame(lobbyPlayers);
+  gameStarted = true;
+  maybeResetFaceUp();
+  broadcastLobby();
+  broadcastState();
+}
 
 function advanceTurn() {
+  if (!game) return;
   game.currentTurn = (game.currentTurn + 1) % game.players.length;
   game.turnDrawCount = 0;
 }
 
 function canAffordTickets(tickets, routeColor, len) {
   const wild = tickets.rainbow || 0;
-  if (routeColor === "gray") {
-    const colors = CARD_ORDER.filter((c) => c !== "rainbow");
+  if (routeColor === 'gray') {
+    const colors = CARD_ORDER.filter((c) => c !== 'rainbow');
     return colors.some((c) => (tickets[c] || 0) + wild >= len);
   }
   const have = (tickets[routeColor] || 0) + wild;
@@ -576,6 +696,7 @@ function canAffordTickets(tickets, routeColor, len) {
 }
 
 function reshuffleIfNeeded() {
+  if (!game) return;
   if (game.deckIndex < game.deck.length) return;
   if (game.discard.length === 0) return;
   game.deck = [...game.discard];
@@ -585,6 +706,7 @@ function reshuffleIfNeeded() {
 }
 
 function drawFromDeck() {
+  if (!game) return null;
   if (game.deckIndex >= game.deck.length) {
     reshuffleIfNeeded();
   }
@@ -593,7 +715,8 @@ function drawFromDeck() {
 }
 
 function maybeResetFaceUp() {
-  const rainbowCount = game.faceUp.filter((c) => c === "rainbow").length;
+  if (!game) return;
+  const rainbowCount = game.faceUp.filter((c) => c === 'rainbow').length;
   const remaining = game.deck.length - game.deckIndex;
   if (rainbowCount < 3 || remaining < 5) return;
   for (const c of game.faceUp) game.discard.push(c);
@@ -608,6 +731,7 @@ function maybeResetFaceUp() {
 }
 
 function spendTickets(playerIdx, color, len) {
+  if (!game) return false;
   const pile = game.ticketsByPlayer[playerIdx];
   const wild = pile.rainbow || 0;
   const base = pile[color] || 0;
@@ -617,11 +741,13 @@ function spendTickets(playerIdx, color, len) {
   pile[color] = base - useColor;
   pile.rainbow = wild - useWild;
   for (let i = 0; i < useColor; i++) game.discard.push(color);
-  for (let i = 0; i < useWild; i++) game.discard.push("rainbow");
+  for (let i = 0; i < useWild; i++) game.discard.push('rainbow');
   return true;
 }
 
-function getState() {
+function getStateForClient(clientId) {
+  if (!gameStarted || !game) return null;
+  const playerIdx = getPlayerIndexForClient(clientId);
   const ticketTotals = game.ticketsByPlayer.map((counts) =>
     Object.values(counts).reduce((a, b) => a + b, 0)
   );
@@ -639,7 +765,7 @@ function getState() {
     cities: game.map.cities,
     edges: game.map.edges,
     faceUp: game.faceUp,
-    tickets: game.ticketsByPlayer[game.currentTurn] || {},
+    tickets: playerIdx >= 0 ? (game.ticketsByPlayer[playerIdx] || {}) : {},
     ticketTotals,
     discardCount: game.discard.length,
     deckRemaining,
@@ -647,19 +773,35 @@ function getState() {
     players: game.players,
     currentTurn: game.currentTurn,
     turnDrawCount: game.turnDrawCount,
+    you: {
+      isPlayer: playerIdx >= 0,
+      isTurn: playerIdx >= 0 && playerIdx === game.currentTurn,
+      playerIndex: playerIdx,
+      playerId: playerIdx >= 0 ? game.players[playerIdx].id : null,
+      name: playerIdx >= 0 ? game.players[playerIdx].name : null,
+      color: playerIdx >= 0 ? game.players[playerIdx].color : null,
+    },
   };
 }
 
+function sendState(ws) {
+  const clientId = socketClientIds.get(ws);
+  if (!clientId) return;
+  const payload = getStateForClient(clientId);
+  if (!payload) return;
+  ws.send(JSON.stringify({ type: 'state', payload }));
+}
+
 function broadcastState() {
-  const msg = JSON.stringify({ type: "state", payload: getState() });
   wss.clients.forEach((client) => {
-    if (client.readyState === 1) client.send(msg);
+    if (client.readyState !== 1) return;
+    sendState(client);
   });
 }
 
 function broadcastLog(payload) {
   const msg = JSON.stringify({
-    type: "log",
+    type: 'log',
     payload: {
       ...payload,
       ts: Date.now(),
@@ -671,6 +813,7 @@ function broadcastLog(payload) {
 }
 
 function ticketsUsedForClaim(playerIdx, color, len) {
+  if (!game) return [];
   const pile = game.ticketsByPlayer[playerIdx];
   const wild = pile.rainbow || 0;
   const base = pile[color] || 0;
@@ -678,14 +821,19 @@ function ticketsUsedForClaim(playerIdx, color, len) {
   const useWild = len - useColor;
   const used = [];
   for (let i = 0; i < useColor; i++) used.push(color);
-  for (let i = 0; i < useWild; i++) used.push("rainbow");
+  for (let i = 0; i < useWild; i++) used.push('rainbow');
   return used;
 }
 
-wss.on("connection", (ws) => {
-  ws.send(JSON.stringify({ type: "state", payload: getState() }));
+wss.on('connection', (ws) => {
+  const clientId = chance.guid();
+  bindSocketClientId(ws, clientId);
 
-  ws.on("message", (data) => {
+  ws.send(JSON.stringify({ type: 'auth', payload: { token: clientId } }));
+  sendLobby(ws);
+  sendState(ws);
+
+  ws.on('message', (data) => {
     let msg = null;
     try {
       msg = JSON.parse(data.toString());
@@ -693,17 +841,98 @@ wss.on("connection", (ws) => {
       return;
     }
 
-    if (!msg || typeof msg.type !== "string") return;
+    if (!msg || typeof msg.type !== 'string') return;
 
-    if (msg.type === "draw_faceup") {
+    if (msg.type === 'auth') {
+      const requested = sanitizeToken(msg.token);
+      const nextClientId = requested || chance.guid();
+      const currentClientId = socketClientIds.get(ws) || '';
+      const wasDifferent = nextClientId !== currentClientId;
+      bindSocketClientId(ws, nextClientId);
+      ws.send(JSON.stringify({ type: 'auth', payload: { token: nextClientId } }));
+
+      if (gameStarted && game) {
+        const playerIdx = getPlayerIndexForClient(nextClientId);
+        if (playerIdx >= 0 && game.players[playerIdx].connected === false) {
+          game.players[playerIdx].connected = true;
+          broadcastLog({
+            playerName: game.players[playerIdx].name,
+            message: game.players[playerIdx].name + ' reconnected.',
+          });
+        } else if (playerIdx >= 0 && wasDifferent && !isClientConnected(currentClientId)) {
+          game.players[playerIdx].connected = true;
+        }
+      }
+
+      sendLobby(ws);
+      sendState(ws);
+      return;
+    }
+
+    if (msg.type === 'join_lobby') {
+      const boundClientId = socketClientIds.get(ws) || '';
+      if (gameStarted) {
+        sendError(ws, 'Game already started.');
+        return;
+      }
+      if (lobbyPlayers.length >= PLAYER_POOL.length) {
+        sendError(ws, 'Lobby is full.');
+        return;
+      }
+      if (getLobbyPlayerIndex(boundClientId) >= 0) {
+        sendError(ws, 'You already joined the lobby.');
+        return;
+      }
+      const name = sanitizeName(msg.name);
+      if (!name) {
+        sendError(ws, 'Please enter a valid name.');
+        return;
+      }
+      const usedColors = new Set(lobbyPlayers.map((p) => p.color));
+      const available = PLAYER_POOL.filter((p) => !usedColors.has(p.color));
+      const chosen = pickRandom(available);
+      if (!chosen) {
+        sendError(ws, 'No player colors remain.');
+        return;
+      }
+      lobbyPlayers.push({
+        id: boundClientId,
+        name,
+        color: chosen.color,
+        hex: chosen.hex,
+      });
+      broadcastLobby();
+      return;
+    }
+
+    if (msg.type === 'start_game') {
+      if (gameStarted) {
+        sendError(ws, 'Game already started.');
+        return;
+      }
+      if (lobbyPlayers.length < 2) {
+        sendError(ws, 'Need at least 2 players to start.');
+        return;
+      }
+      startGame();
+      return;
+    }
+
+    if (!gameStarted || !game) return;
+
+    const playerIdx = getPlayerIndexForSocket(ws);
+    if (playerIdx < 0) return;
+    if (playerIdx !== game.currentTurn) return;
+
+    if (msg.type === 'draw_faceup') {
       const idx = Number(msg.index);
       if (!Number.isFinite(idx)) return;
       if (idx < 0 || idx >= game.faceUp.length) return;
       const color = game.faceUp[idx];
       if (!color) return;
       if (game.turnDrawCount >= 2) return;
-      if (color === "rainbow" && game.turnDrawCount > 0) return;
-      const p = game.currentTurn;
+      if (color === 'rainbow' && game.turnDrawCount > 0) return;
+      const p = playerIdx;
       game.ticketsByPlayer[p][color] = (game.ticketsByPlayer[p][color] || 0) + 1;
       const next = drawFromDeck();
       if (next) {
@@ -712,7 +941,7 @@ wss.on("connection", (ws) => {
         game.faceUp.splice(idx, 1);
       }
       maybeResetFaceUp();
-      if (color === "rainbow") {
+      if (color === 'rainbow') {
         advanceTurn();
       } else {
         game.turnDrawCount += 1;
@@ -720,7 +949,7 @@ wss.on("connection", (ws) => {
       }
       broadcastLog({
         playerName: game.players[p].name,
-        message: `${game.players[p].name} took `,
+        message: game.players[p].name + ' took ',
         cards: [color],
         faceDown: false,
       });
@@ -728,77 +957,103 @@ wss.on("connection", (ws) => {
       return;
     }
 
-    if (msg.type === "draw_deck") {
+    if (msg.type === 'draw_deck') {
       const color = drawFromDeck();
       if (!color) return;
       if (game.turnDrawCount >= 2) return;
-      const p = game.currentTurn;
+      const p = playerIdx;
       game.ticketsByPlayer[p][color] = (game.ticketsByPlayer[p][color] || 0) + 1;
       game.turnDrawCount += 1;
       if (game.turnDrawCount >= 2) advanceTurn();
       maybeResetFaceUp();
       broadcastLog({
         playerName: game.players[p].name,
-        message: `${game.players[p].name} took `,
-        cards: ["back"],
+        message: game.players[p].name + ' took ',
+        cards: ['back'],
         faceDown: true,
       });
       broadcastState();
       return;
     }
 
-    if (msg.type === "submit_route") {
-      const rawEdgeId = String(msg.edgeId || "");
-      const chosen = String(msg.color || "");
+    if (msg.type === 'submit_route') {
+      const rawEdgeId = String(msg.edgeId || '');
+      const chosen = String(msg.color || '');
       const edgeId = normalizeEdgeId(rawEdgeId);
-      console.log(`[claim] request edge=${rawEdgeId} color=${chosen} player=${game.players[game.currentTurn].name}`);
+      console.log('[claim] request edge=' + rawEdgeId + ' color=' + chosen + ' player=' + game.players[playerIdx].name);
       if (!edgeId) {
-        console.log("[claim] rejected: missing edgeId");
+        console.log('[claim] rejected: missing edgeId');
         return;
       }
       const edge = game.map.edges.find((e) => keyEdge(e.u, e.v) === edgeId);
       if (!edge) {
-        console.log("[claim] rejected: edge not found");
+        console.log('[claim] rejected: edge not found');
         return;
       }
       if (edge.claimedBy) {
-        console.log("[claim] rejected: already claimed");
+        console.log('[claim] rejected: already claimed');
         return;
       }
-      const p = game.currentTurn;
-      if (edge.color.name !== "gray" && chosen !== edge.color.name) {
-        console.log("[claim] rejected: color mismatch");
+      const p = playerIdx;
+      if (!CARD_ORDER.includes(chosen) || chosen === 'rainbow') {
+        console.log('[claim] rejected: invalid chosen color');
         return;
       }
-      if (edge.color.name === "gray" && !chosen) {
-        console.log("[claim] rejected: missing color for gray route");
+      if (edge.color.name !== 'gray' && chosen !== edge.color.name) {
+        console.log('[claim] rejected: color mismatch');
+        return;
+      }
+      if (edge.color.name === 'gray' && !chosen) {
+        console.log('[claim] rejected: missing color for gray route');
         return;
       }
       const canClaim = canAffordTickets(game.ticketsByPlayer[p], chosen, edge.len);
       if (!canClaim) {
-        console.log("[claim] rejected: insufficient tickets");
+        console.log('[claim] rejected: insufficient tickets');
         return;
       }
       const used = ticketsUsedForClaim(p, chosen, edge.len);
       if (!spendTickets(p, chosen, edge.len)) {
-        console.log("[claim] rejected: spend failed");
+        console.log('[claim] rejected: spend failed');
         return;
       }
-      const player = game.players[game.currentTurn];
+      const player = game.players[p];
       edge.claimedBy = player.color;
       broadcastLog({
         playerName: player.name,
-        message: `${player.name} claimed ${game.map.cities[edge.u].name} — ${game.map.cities[edge.v].name} using`,
+        message: player.name + ' claimed ' + game.map.cities[edge.u].name + ' - ' + game.map.cities[edge.v].name + ' using',
         newline: true,
         cards: used,
       });
       advanceTurn();
       broadcastState();
-      console.log("[claim] accepted");
+      console.log('[claim] accepted');
     }
+  });
+
+  ws.on('close', () => {
+    const disconnectedClientId = unbindSocket(ws);
+    if (!disconnectedClientId) return;
+
+    if (gameStarted && game) {
+      const playerIdx = getPlayerIndexForClient(disconnectedClientId);
+      if (playerIdx >= 0 && !isClientConnected(disconnectedClientId) && game.players[playerIdx].connected !== false) {
+        game.players[playerIdx].connected = false;
+        broadcastLog({
+          playerName: game.players[playerIdx].name,
+          message: game.players[playerIdx].name + ' disconnected.',
+        });
+      }
+      return;
+    }
+
+    const idx = getLobbyPlayerIndex(disconnectedClientId);
+    if (idx < 0) return;
+    lobbyPlayers.splice(idx, 1);
+    broadcastLobby();
   });
 });
 
 server.listen(PORT, () => {
-  console.log(`Server running at http://localhost:${PORT}`);
+  console.log('Server running at http://localhost:' + PORT);
 });

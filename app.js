@@ -593,6 +593,7 @@ function renderSvg(svg, map, opts) {
   svg.appendChild(routeGroup);
 
   const tickets = opts.tickets || {};
+  const canInteract = opts.interactive !== false;
   for (const e of edges) {
     const a = toScreen(cities[e.u]);
     const b = toScreen(cities[e.v]);
@@ -611,7 +612,7 @@ function renderSvg(svg, map, opts) {
     const pathData = `M ${a.x} ${a.y} Q ${cx} ${cy} ${b.x} ${b.y}`;
     const claimedHex = e.claimedBy ? CLAIM_COLOR_MAP[e.claimedBy] : null;
     const strokeHex = claimedHex || e.color.hex;
-    const affordable = !e.claimedBy && canAffordTickets(tickets, e.color.name, e.len);
+    const affordable = canInteract && !e.claimedBy && canAffordTickets(tickets, e.color.name, e.len);
 
     const under = document.createElementNS("http://www.w3.org/2000/svg", "path");
     under.setAttribute("d", pathData);
@@ -642,7 +643,7 @@ function renderSvg(svg, map, opts) {
       color.classList.add("route-claimed", "route-disabled");
       color.style.pointerEvents = "none";
     } else if (!affordable) {
-      color.classList.add("route-disabled", "dim");
+      color.classList.add("route-disabled", canInteract ? "dim" : "offturn");
       color.style.pointerEvents = "none";
     }
     routeGroup.appendChild(color);
@@ -689,7 +690,7 @@ function renderSvg(svg, map, opts) {
         block.classList.add("route-claimed", "route-disabled");
         block.style.pointerEvents = "none";
       } else if (!affordable) {
-        block.classList.add("route-disabled", "dim");
+        block.classList.add("route-disabled", canInteract ? "dim" : "offturn");
         block.style.pointerEvents = "none";
       }
       block.setAttribute("transform", `rotate(${ang} ${p.x} ${p.y})`);
@@ -754,6 +755,15 @@ const CARD_ORDER = [
   "rainbow",
 ];
 
+const gameWrapEl = document.getElementById("gameWrap");
+const lobbyScreenEl = document.getElementById("lobbyScreen");
+const lobbyJoinFormEl = document.getElementById("lobbyJoinForm");
+const lobbyNameInputEl = document.getElementById("lobbyNameInput");
+const lobbyJoinBtnEl = document.getElementById("lobbyJoinBtn");
+const lobbyStartBtnEl = document.getElementById("lobbyStartBtn");
+const lobbyPlayersListEl = document.getElementById("lobbyPlayersList");
+const lobbyStatusEl = document.getElementById("lobbyStatus");
+
 const svg = document.getElementById("mapSvg");
 const routeInfo = document.getElementById("routeInfo");
 const submitBtn = document.getElementById("submitBtn");
@@ -768,21 +778,117 @@ const colorModalEl = document.getElementById("colorModal");
 const colorOptionsEl = document.getElementById("colorOptions");
 const colorSubmitEl = document.getElementById("colorSubmit");
 const colorCancelEl = document.getElementById("colorCancel");
+
 let currentMap = null;
 let selectedEdgeId = null;
 let selectedEdgeMeta = null;
 let pendingColor = null;
-let ticketCounts = Object.fromEntries(CARD_ORDER.map(k => [k, 0]));
+let idleRouteInfoText = "Select a route";
+let ticketCounts = Object.fromEntries(CARD_ORDER.map((k) => [k, 0]));
 let ws = null;
 let turnDrawCount = 0;
+let isMyTurn = false;
+let amPlayer = false;
+let myPlayerId = null;
+let gameStarted = false;
+let lobbyCanJoin = false;
+let lobbyCanStart = false;
+const CLIENT_TOKEN_KEY = "ticket_to_ride_client_token";
+
+function setGameVisibility(showGame) {
+  if (gameWrapEl) gameWrapEl.classList.toggle("hidden", !showGame);
+  if (lobbyScreenEl) lobbyScreenEl.classList.toggle("hidden", showGame);
+}
+
+function setLobbyStatus(text) {
+  if (!lobbyStatusEl) return;
+  lobbyStatusEl.textContent = text || "";
+}
+
+function refreshLobbyControls() {
+  const name = (lobbyNameInputEl?.value || "").trim();
+  if (lobbyJoinBtnEl) lobbyJoinBtnEl.disabled = !lobbyCanJoin || !name;
+  if (lobbyNameInputEl) lobbyNameInputEl.disabled = !lobbyCanJoin;
+  if (lobbyStartBtnEl) lobbyStartBtnEl.disabled = !lobbyCanStart;
+}
+
+function renderLobby(payload) {
+  const players = (payload && payload.players) || [];
+  if (lobbyPlayersListEl) {
+    lobbyPlayersListEl.innerHTML = "";
+    players.forEach((p) => {
+      const row = document.createElement("div");
+      row.className = "lobby-player";
+
+      const swatch = document.createElement("div");
+      swatch.className = "player-swatch";
+      swatch.style.background = p.hex || p.color;
+
+      const name = document.createElement("div");
+      name.textContent = `${p.name}`;
+
+      row.appendChild(swatch);
+      row.appendChild(name);
+      lobbyPlayersListEl.appendChild(row);
+    });
+  }
+
+  lobbyCanJoin = !!(payload && payload.canJoin);
+  lobbyCanStart = !!(payload && payload.canStart);
+
+  const showStart = !payload?.gameStarted && players.length >= 2;
+  if (lobbyStartBtnEl) lobbyStartBtnEl.classList.toggle("hidden", !showStart);
+
+  if (payload?.you) {
+    setLobbyStatus("");
+    if (lobbyNameInputEl && !lobbyNameInputEl.value) {
+      lobbyNameInputEl.value = payload.you.name || "";
+    }
+  } else if (payload?.gameStarted) {
+    setLobbyStatus("Game already in progress.");
+  } else if (players.length >= (payload?.maxPlayers || 4)) {
+    setLobbyStatus("Lobby is full.");
+  } else {
+    setLobbyStatus("");
+  }
+
+  refreshLobbyControls();
+}
+
+function setIdleRouteInfo(text) {
+  idleRouteInfoText = text || "Select a route";
+  if (!selectedEdgeMeta && routeInfo) {
+    routeInfo.textContent = idleRouteInfoText;
+  }
+}
+
+function updateTurnStatus(players, currentTurn) {
+  const active = players[currentTurn] || null;
+  if (!active) {
+    setIdleRouteInfo("Select a route");
+    return;
+  }
+
+  if (amPlayer && isMyTurn) {
+    setIdleRouteInfo("Select a route");
+    return;
+  }
+
+  setIdleRouteInfo(`Waiting for ${active.name}`);
+}
 
 function render() {
   if (!currentMap) return;
-  renderSvg(svg, currentMap, { labels: true, tickets: ticketCounts });
+  renderSvg(svg, currentMap, {
+    labels: true,
+    tickets: ticketCounts,
+    interactive: amPlayer && isMyTurn,
+  });
   wireRoutes();
   selectedEdgeId = null;
+  selectedEdgeMeta = null;
   submitBtn.disabled = true;
-  routeInfo.textContent = "Select a route";
+  routeInfo.textContent = idleRouteInfoText;
 }
 
 function drawFaceUp(faceUp) {
@@ -790,15 +896,19 @@ function drawFaceUp(faceUp) {
   for (let i = 0; i < faceUp.length; i++) {
     const name = faceUp[i];
     const img = document.createElement("img");
-    img.className = "card clickable";
+    img.className = "card";
     img.alt = `${name} card`;
     img.src = `img/${name}.png`;
     img.dataset.color = name;
     img.dataset.index = String(i);
-    if (name === "rainbow" && turnDrawCount > 0) {
+
+    const canPick = amPlayer && isMyTurn && !(name === "rainbow" && turnDrawCount > 0);
+    if (canPick) {
+      img.classList.add("clickable");
+    } else if (amPlayer && isMyTurn && name === "rainbow" && turnDrawCount > 0) {
       img.classList.add("disabled");
-      img.classList.remove("clickable");
     }
+
     faceUpEl.appendChild(img);
   }
 }
@@ -853,16 +963,21 @@ function renderPlayers(players, currentTurn) {
   playersListEl.innerHTML = "";
   players.forEach((p, idx) => {
     const row = document.createElement("div");
-    row.className = `player${idx === currentTurn ? " active" : ""}`;
+    row.className = `player${idx === currentTurn ? " active" : ""}${p.id === myPlayerId ? " you" : ""}`;
+
     const swatch = document.createElement("div");
     swatch.className = "player-swatch";
     swatch.style.background = p.hex || p.color;
+
     const info = document.createElement("div");
     info.className = "player-info";
+
     const name = document.createElement("div");
     name.className = "player-name";
     const score = p.score ?? 0;
-    name.textContent = `${p.name || p.color} — ${score} pts`;
+    const youTag = p.id === myPlayerId ? " (You)" : "";
+    name.textContent = `${p.name || p.color}${youTag} - ${score} pts`;
+
     const tickets = document.createElement("div");
     tickets.className = "player-tickets";
     const img = document.createElement("img");
@@ -871,6 +986,7 @@ function renderPlayers(players, currentTurn) {
     const total = p.ticketTotal ?? 0;
     const count = document.createElement("span");
     count.textContent = String(total);
+
     tickets.appendChild(img);
     tickets.appendChild(count);
     info.appendChild(name);
@@ -883,28 +999,81 @@ function renderPlayers(players, currentTurn) {
 
 function applyState(state) {
   if (!state) return;
+
+  gameStarted = true;
+  setGameVisibility(true);
+
   turnDrawCount = state.turnDrawCount || 0;
-  ticketCounts = { ...Object.fromEntries(CARD_ORDER.map(k => [k, 0])), ...(state.tickets || {}) };
+  const you = state.you || {};
+  amPlayer = !!you.isPlayer;
+  isMyTurn = !!you.isTurn;
+  myPlayerId = you.playerId || null;
+
+  ticketCounts = { ...Object.fromEntries(CARD_ORDER.map((k) => [k, 0])), ...(state.tickets || {}) };
   currentMap = { cities: state.cities || [], edges: state.edges || [] };
+
   render();
   drawFaceUp(state.faceUp || []);
   renderTicketPile();
+
   const players = (state.players || []).map((p, idx) => ({
     ...p,
     ticketTotal: (state.ticketTotals || [])[idx] || 0,
     score: (state.scores || [])[idx] || 0,
   }));
-  renderPlayers(players, state.currentTurn ?? 0);
+
+  const currentTurn = state.currentTurn ?? 0;
+  renderPlayers(players, currentTurn);
+  updateTurnStatus(players, currentTurn);
+
   if (deckBackEl) {
     const empty = (state.deckRemaining ?? 1) <= 0;
-    deckBackEl.classList.toggle("disabled", empty);
-    deckBackEl.classList.toggle("clickable", !empty);
+    if (!amPlayer || !isMyTurn) {
+      deckBackEl.classList.remove("disabled");
+      deckBackEl.classList.remove("clickable");
+    } else if (empty) {
+      deckBackEl.classList.add("disabled");
+      deckBackEl.classList.remove("clickable");
+    } else {
+      deckBackEl.classList.remove("disabled");
+      deckBackEl.classList.add("clickable");
+    }
+  }
+
+  if (!amPlayer || !isMyTurn) {
+    closeColorModal();
+  }
+
+  updateCardSizing();
+}
+
+function handleServerError(payload) {
+  const text = payload?.message || "Server rejected that action.";
+  if (!gameStarted) {
+    setLobbyStatus(text);
+  } else if (routeInfo) {
+    routeInfo.textContent = text;
   }
 }
 
 function connectSocket() {
   const protocol = window.location.protocol === "https:" ? "wss" : "ws";
   ws = new WebSocket(`${protocol}://${window.location.host}`);
+
+  ws.addEventListener("open", () => {
+    let storedToken = "";
+    try {
+      storedToken = String(window.localStorage.getItem(CLIENT_TOKEN_KEY) || "");
+    } catch (err) {
+      storedToken = "";
+    }
+    ws.send(JSON.stringify({ type: "auth", token: storedToken }));
+  });
+
+  ws.addEventListener("close", () => {
+    setLobbyStatus("Disconnected from server.");
+  });
+
   ws.addEventListener("message", (event) => {
     let msg = null;
     try {
@@ -912,10 +1081,43 @@ function connectSocket() {
     } catch (err) {
       return;
     }
-    if (msg && msg.type === "state") {
+
+    if (!msg || typeof msg.type !== "string") return;
+
+    if (msg.type === "auth") {
+      const token = String(msg?.payload?.token || "");
+      if (token) {
+        try {
+          window.localStorage.setItem(CLIENT_TOKEN_KEY, token);
+        } catch (err) {
+          // ignore storage failures
+        }
+      }
+      return;
+    }
+
+    if (msg.type === "lobby") {
+      renderLobby(msg.payload || {});
+      if (msg.payload && msg.payload.gameStarted) {
+        setGameVisibility(true);
+      } else {
+        setGameVisibility(false);
+      }
+      return;
+    }
+
+    if (msg.type === "state") {
       applyState(msg.payload);
-    } else if (msg && msg.type === "log") {
+      return;
+    }
+
+    if (msg.type === "log") {
       appendLog(msg.payload);
+      return;
+    }
+
+    if (msg.type === "error") {
+      handleServerError(msg.payload);
     }
   });
 }
@@ -929,33 +1131,47 @@ function appendLog(entry) {
   text.textContent = entry.message || `${entry.playerName} took `;
   item.appendChild(text);
 
-  const cardsWrap = document.createElement("span");
-  cardsWrap.className = "log-cards";
+  if (entry.cards && Array.isArray(entry.cards) && entry.cards.length > 0) {
+    const cardsWrap = document.createElement("span");
+    cardsWrap.className = "log-cards";
 
-  if (entry.cards && Array.isArray(entry.cards)) {
     entry.cards.forEach((c) => {
       const img = document.createElement("img");
       img.src = `img/${c}.png`;
       img.alt = `${c} card`;
       cardsWrap.appendChild(img);
     });
-  } else {
-    const img = document.createElement("img");
-    const color = entry.faceDown ? "back" : entry.cardColor;
-    img.src = `img/${color}.png`;
-    img.alt = `${color} card`;
-    cardsWrap.appendChild(img);
-  }
 
-  if (entry.newline) {
-    item.classList.add("log-item-stacked");
+    if (entry.newline) {
+      item.classList.add("log-item-stacked");
+    }
+    item.appendChild(cardsWrap);
   }
-  item.appendChild(cardsWrap);
 
   logListEl.prepend(item);
 }
 
+lobbyJoinFormEl?.addEventListener("submit", (e) => {
+  e.preventDefault();
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  if (!lobbyCanJoin) return;
+  const name = (lobbyNameInputEl?.value || "").trim();
+  if (!name) return;
+  ws.send(JSON.stringify({ type: "join_lobby", name }));
+});
+
+lobbyNameInputEl?.addEventListener("input", () => {
+  refreshLobbyControls();
+});
+
+lobbyStartBtnEl?.addEventListener("click", () => {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  if (!lobbyCanStart) return;
+  ws.send(JSON.stringify({ type: "start_game" }));
+});
+
 faceUpEl.addEventListener("click", (e) => {
+  if (!amPlayer || !isMyTurn) return;
   const target = e.target;
   if (!(target instanceof HTMLImageElement)) return;
   if (target.classList.contains("disabled")) return;
@@ -967,6 +1183,7 @@ faceUpEl.addEventListener("click", (e) => {
 });
 
 deckBackEl.addEventListener("click", () => {
+  if (!amPlayer || !isMyTurn) return;
   if (deckBackEl.classList.contains("disabled")) return;
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ type: "draw_deck" }));
@@ -975,28 +1192,32 @@ deckBackEl.addEventListener("click", () => {
 
 function wireRoutes() {
   const routes = svg.querySelectorAll(".route-color, .route-hit");
+  if (!amPlayer || !isMyTurn) return;
 
   function setClassForEdge(edgeId, cls, on) {
     if (!edgeId) return;
     const els = svg.querySelectorAll(`[data-edge-id="${edgeId}"]`);
-    els.forEach(el => el.classList.toggle(cls, on));
+    els.forEach((el) => el.classList.toggle(cls, on));
   }
 
   function clearAll(cls) {
-    svg.querySelectorAll(`.${cls}`).forEach(el => el.classList.remove(cls));
+    svg.querySelectorAll(`.${cls}`).forEach((el) => el.classList.remove(cls));
   }
 
   routes.forEach((el) => {
     if (el.dataset.claimed === "true") return;
     if (el.dataset.affordable !== "true") return;
+
     el.addEventListener("mouseenter", () => {
       const edgeId = el.dataset.edgeId;
       setClassForEdge(edgeId, "route-hover", true);
     });
+
     el.addEventListener("mouseleave", () => {
       const edgeId = el.dataset.edgeId;
       setClassForEdge(edgeId, "route-hover", false);
     });
+
     el.addEventListener("click", (e) => {
       clearAll("route-selected");
       const edgeId = el.dataset.edgeId;
@@ -1012,21 +1233,22 @@ function wireRoutes() {
       submitBtn.disabled = el.dataset.claimed === "true" || el.dataset.affordable !== "true";
       const from = el.dataset.from;
       const to = el.dataset.to;
-      routeInfo.textContent = `${from} — ${to}`;
+      routeInfo.textContent = `${from} - ${to}`;
       e.stopPropagation();
     });
   });
 }
 
 svg.addEventListener("click", () => {
-  svg.querySelectorAll(".route-selected").forEach(r => r.classList.remove("route-selected"));
-  routeInfo.textContent = "Select a route";
+  svg.querySelectorAll(".route-selected").forEach((r) => r.classList.remove("route-selected"));
+  routeInfo.textContent = idleRouteInfoText;
   selectedEdgeId = null;
   selectedEdgeMeta = null;
   submitBtn.disabled = true;
 });
 
 submitBtn.addEventListener("click", () => {
+  if (!amPlayer || !isMyTurn) return;
   if (!selectedEdgeMeta || !selectedEdgeMeta.affordable || selectedEdgeMeta.claimed) return;
   const colors = possibleColors(ticketCounts, selectedEdgeMeta.routeColor, selectedEdgeMeta.len);
   if (colors.length <= 0) return;
@@ -1038,6 +1260,7 @@ submitBtn.addEventListener("click", () => {
 });
 
 function sendSubmitRoute(edgeId, color) {
+  if (!amPlayer || !isMyTurn) return;
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ type: "submit_route", edgeId, color }));
   }
@@ -1055,7 +1278,7 @@ function openColorModal(colors) {
     img.alt = `${c} ticket`;
     opt.appendChild(img);
     opt.addEventListener("click", () => {
-      colorOptionsEl.querySelectorAll(".modal-option").forEach(el => el.classList.remove("selected"));
+      colorOptionsEl.querySelectorAll(".modal-option").forEach((el) => el.classList.remove("selected"));
       opt.classList.add("selected");
       pendingColor = c;
       colorSubmitEl.disabled = false;
@@ -1081,7 +1304,8 @@ colorSubmitEl.addEventListener("click", () => {
   closeColorModal();
 });
 
-
+setGameVisibility(false);
+refreshLobbyControls();
 connectSocket();
 
 if (typeof ResizeObserver !== "undefined") {
@@ -1092,6 +1316,7 @@ if (typeof ResizeObserver !== "undefined") {
   window.addEventListener("resize", updateCardSizing);
   updateCardSizing();
 }
+
 function updateCardSizing() {
   if (!gameBox || !stageInner) return;
   const rect = gameBox.getBoundingClientRect();
