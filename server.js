@@ -74,6 +74,9 @@ const ROUTE_POINTS = {
   6: 16,
 };
 
+const STARTING_TRAINS = 10;
+const FINAL_TURN_THRESHOLD = 2;
+
 const PLAYER_POOL = [
   { color: "red", hex: "#cc0000" },
   { color: "green", hex: "#008000" },
@@ -569,9 +572,14 @@ function initGame(players) {
     faceUp,
     ticketsByPlayer,
     discard: [],
-    players: players.map((p) => ({ ...p, connected: true })),
+    players: players.map((p) => ({ ...p, connected: true, trains: STARTING_TRAINS })),
     currentTurn,
     turnDrawCount: 0,
+    finalRoundActive: false,
+    finalRoundTurnsRemaining: 0,
+    finalRoundTriggeredBy: null,
+    gameOver: false,
+    standings: [],
   };
 }
 
@@ -669,6 +677,22 @@ function sendError(ws, message) {
   ws.send(JSON.stringify({ type: 'error', payload: { message } }));
 }
 
+function returnToLobby() {
+  const sourcePlayers = (game && game.players) ? game.players : lobbyPlayers;
+  const connected = sourcePlayers
+    .filter((p) => isClientConnected(p.id))
+    .map((p) => ({
+      id: p.id,
+      name: p.name,
+      color: p.color,
+      hex: p.hex,
+    }));
+  lobbyPlayers.splice(0, lobbyPlayers.length, ...connected);
+  game = null;
+  gameStarted = false;
+  broadcastLobby();
+}
+
 function startGame() {
   if (gameStarted) return;
   if (lobbyPlayers.length < 2) return;
@@ -679,10 +703,61 @@ function startGame() {
   broadcastState();
 }
 
-function advanceTurn() {
-  if (!game) return;
-  game.currentTurn = (game.currentTurn + 1) % game.players.length;
+function computeScores() {
+  if (!game) return [];
+  return game.players.map((p) => {
+    let total = 0;
+    for (const e of game.map.edges) {
+      if (e.claimedBy === p.color) {
+        total += ROUTE_POINTS[e.len] || 0;
+      }
+    }
+    return total;
+  });
+}
+
+function buildStandings(scores) {
+  if (!game) return [];
+  return game.players
+    .map((p, idx) => ({
+      id: p.id,
+      name: p.name,
+      color: p.color,
+      hex: p.hex,
+      score: scores[idx] || 0,
+    }))
+    .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
+}
+
+function endGame() {
+  if (!game || game.gameOver) return;
+  game.gameOver = true;
   game.turnDrawCount = 0;
+  const scores = computeScores();
+  game.standings = buildStandings(scores);
+}
+
+function triggerFinalRound(triggerIdx) {
+  if (!game || game.finalRoundActive) return;
+  game.finalRoundActive = true;
+  game.finalRoundTurnsRemaining = game.players.length;
+  game.finalRoundTriggeredBy = game.players[triggerIdx]?.id || null;
+}
+
+function advanceTurn(options = {}) {
+  const tickFinalRound = options.tickFinalRound !== false;
+  if (!game) return;
+  game.turnDrawCount = 0;
+  if (game.gameOver) return;
+  const nextTurn = (game.currentTurn + 1) % game.players.length;
+  if (game.finalRoundActive && tickFinalRound) {
+    game.finalRoundTurnsRemaining = Math.max(0, (game.finalRoundTurnsRemaining || 0) - 1);
+    if (game.finalRoundTurnsRemaining <= 0) {
+      endGame();
+      return;
+    }
+  }
+  game.currentTurn = nextTurn;
 }
 
 function canAffordTickets(tickets, routeColor, len) {
@@ -751,16 +826,9 @@ function getStateForClient(clientId) {
   const ticketTotals = game.ticketsByPlayer.map((counts) =>
     Object.values(counts).reduce((a, b) => a + b, 0)
   );
-  const scores = game.players.map((p) => {
-    let total = 0;
-    for (const e of game.map.edges) {
-      if (e.claimedBy === p.color) {
-        total += ROUTE_POINTS[e.len] || 0;
-      }
-    }
-    return total;
-  });
+  const scores = computeScores();
   const deckRemaining = Math.max(0, (game.deck.length - game.deckIndex) + game.discard.length);
+  const finalRoundTriggeredByPlayer = game.players.find((p) => p.id === game.finalRoundTriggeredBy) || null;
   return {
     cities: game.map.cities,
     edges: game.map.edges,
@@ -773,9 +841,13 @@ function getStateForClient(clientId) {
     players: game.players,
     currentTurn: game.currentTurn,
     turnDrawCount: game.turnDrawCount,
+    gameOver: game.gameOver,
+    finalRoundActive: game.finalRoundActive,
+    finalRoundTriggeredBy: finalRoundTriggeredByPlayer ? finalRoundTriggeredByPlayer.name : null,
+    standings: game.standings || [],
     you: {
       isPlayer: playerIdx >= 0,
-      isTurn: playerIdx >= 0 && playerIdx === game.currentTurn,
+      isTurn: !game.gameOver && playerIdx >= 0 && playerIdx === game.currentTurn,
       playerIndex: playerIdx,
       playerId: playerIdx >= 0 ? game.players[playerIdx].id : null,
       name: playerIdx >= 0 ? game.players[playerIdx].name : null,
@@ -918,10 +990,17 @@ wss.on('connection', (ws) => {
       return;
     }
 
+    if (msg.type === 'return_to_lobby') {
+      if (!gameStarted || !game || !game.gameOver) return;
+      returnToLobby();
+      return;
+    }
+
     if (!gameStarted || !game) return;
 
     const playerIdx = getPlayerIndexForSocket(ws);
     if (playerIdx < 0) return;
+    if (game.gameOver) return;
     if (playerIdx !== game.currentTurn) return;
 
     if (msg.type === 'draw_faceup') {
@@ -983,49 +1062,77 @@ wss.on('connection', (ws) => {
       console.log('[claim] request edge=' + rawEdgeId + ' color=' + chosen + ' player=' + game.players[playerIdx].name);
       if (!edgeId) {
         console.log('[claim] rejected: missing edgeId');
+        sendError(ws, 'Invalid route selection.');
         return;
       }
       const edge = game.map.edges.find((e) => keyEdge(e.u, e.v) === edgeId);
       if (!edge) {
         console.log('[claim] rejected: edge not found');
+        sendError(ws, 'Route not found.');
         return;
       }
       if (edge.claimedBy) {
         console.log('[claim] rejected: already claimed');
+        sendError(ws, 'That route has already been claimed.');
         return;
       }
       const p = playerIdx;
       if (!CARD_ORDER.includes(chosen) || chosen === 'rainbow') {
         console.log('[claim] rejected: invalid chosen color');
+        sendError(ws, 'Invalid color selection.');
         return;
       }
       if (edge.color.name !== 'gray' && chosen !== edge.color.name) {
         console.log('[claim] rejected: color mismatch');
+        sendError(ws, 'That route requires a different color.');
         return;
       }
       if (edge.color.name === 'gray' && !chosen) {
         console.log('[claim] rejected: missing color for gray route');
+        sendError(ws, 'Choose a color for gray routes.');
+        return;
+      }
+      if ((game.players[p].trains || 0) < edge.len) {
+        console.log('[claim] rejected: insufficient trains');
+        sendError(ws, 'Not enough trains for that route.');
         return;
       }
       const canClaim = canAffordTickets(game.ticketsByPlayer[p], chosen, edge.len);
       if (!canClaim) {
         console.log('[claim] rejected: insufficient tickets');
+        sendError(ws, 'Not enough cards for that route.');
         return;
       }
       const used = ticketsUsedForClaim(p, chosen, edge.len);
       if (!spendTickets(p, chosen, edge.len)) {
         console.log('[claim] rejected: spend failed');
+        sendError(ws, 'Could not spend cards for that route.');
         return;
       }
       const player = game.players[p];
       edge.claimedBy = player.color;
+      player.trains = Math.max(0, (player.trains || 0) - edge.len);
       broadcastLog({
         playerName: player.name,
         message: player.name + ' claimed ' + game.map.cities[edge.u].name + ' - ' + game.map.cities[edge.v].name + ' using',
         newline: true,
         cards: used,
       });
-      advanceTurn();
+      let triggeredFinalRoundThisTurn = false;
+      if (!game.finalRoundActive && player.trains <= FINAL_TURN_THRESHOLD) {
+        triggerFinalRound(p);
+        triggeredFinalRoundThisTurn = true;
+        broadcastLog({
+          playerName: player.name,
+          message: player.name + ' triggered the final round (2 or fewer trains left). Each player gets one final turn.',
+        });
+      }
+      advanceTurn({ tickFinalRound: !triggeredFinalRoundThisTurn });
+      if (game.gameOver) {
+        broadcastLog({
+          message: 'Game over. Final standings are now available.',
+        });
+      }
       broadcastState();
       console.log('[claim] accepted');
     }

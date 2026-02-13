@@ -291,6 +291,14 @@ img {
 .player-name {
   font-weight: 700;
 }
+.player-points {
+  font-size: 12px;
+  opacity: 0.92;
+}
+.player-trains {
+  font-size: 12px;
+  opacity: 0.92;
+}
 .player-tickets {
   display: flex;
   align-items: center;
@@ -566,4 +574,39 @@ img {
 .modal-btn:disabled {
   opacity: 0.6;
   cursor: not-allowed;
+}
+.gameover-card {
+  min-width: min(560px, 94vw);
+}
+.gameover-summary {
+  font-size: 13px;
+  color: #4b3523;
+}
+.standings-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.standing-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px;
+  border-radius: 10px;
+  border: 1px solid rgba(120, 90, 60, 0.25);
+  background: rgba(255, 255, 255, 0.7);
+}
+.standing-place {
+  font-weight: 800;
+  font-size: 12px;
+  width: 28px;
+  text-align: right;
+}
+.standing-name {
+  font-weight: 700;
+}
+.standing-score {
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
 }

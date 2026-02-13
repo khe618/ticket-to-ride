@@ -593,6 +593,7 @@ function renderSvg(svg, map, opts) {
   svg.appendChild(routeGroup);
 
   const tickets = opts.tickets || {};
+  const trainsRemaining = Number.isFinite(opts.trainsRemaining) ? opts.trainsRemaining : Infinity;
   const canInteract = opts.interactive !== false;
   for (const e of edges) {
     const a = toScreen(cities[e.u]);
@@ -612,7 +613,7 @@ function renderSvg(svg, map, opts) {
     const pathData = `M ${a.x} ${a.y} Q ${cx} ${cy} ${b.x} ${b.y}`;
     const claimedHex = e.claimedBy ? CLAIM_COLOR_MAP[e.claimedBy] : null;
     const strokeHex = claimedHex || e.color.hex;
-    const affordable = canInteract && !e.claimedBy && canAffordTickets(tickets, e.color.name, e.len);
+    const affordable = canInteract && !e.claimedBy && canAffordRoute(tickets, trainsRemaining, e.color.name, e.len);
 
     const under = document.createElementNS("http://www.w3.org/2000/svg", "path");
     under.setAttribute("d", pathData);
@@ -778,6 +779,10 @@ const colorModalEl = document.getElementById("colorModal");
 const colorOptionsEl = document.getElementById("colorOptions");
 const colorSubmitEl = document.getElementById("colorSubmit");
 const colorCancelEl = document.getElementById("colorCancel");
+const gameOverModalEl = document.getElementById("gameOverModal");
+const gameOverSummaryEl = document.getElementById("gameOverSummary");
+const standingsListEl = document.getElementById("standingsList");
+const returnLobbyBtnEl = document.getElementById("returnLobbyBtn");
 
 let currentMap = null;
 let selectedEdgeId = null;
@@ -785,12 +790,14 @@ let selectedEdgeMeta = null;
 let pendingColor = null;
 let idleRouteInfoText = "Select a route";
 let ticketCounts = Object.fromEntries(CARD_ORDER.map((k) => [k, 0]));
+let myTrainsRemaining = 0;
 let ws = null;
 let turnDrawCount = 0;
 let isMyTurn = false;
 let amPlayer = false;
 let myPlayerId = null;
 let gameStarted = false;
+let gameOver = false;
 let lobbyCanJoin = false;
 let lobbyCanStart = false;
 const CLIENT_TOKEN_KEY = "ticket_to_ride_client_token";
@@ -798,6 +805,10 @@ const CLIENT_TOKEN_KEY = "ticket_to_ride_client_token";
 function setGameVisibility(showGame) {
   if (gameWrapEl) gameWrapEl.classList.toggle("hidden", !showGame);
   if (lobbyScreenEl) lobbyScreenEl.classList.toggle("hidden", showGame);
+}
+
+function hideGameOverModal() {
+  if (gameOverModalEl) gameOverModalEl.classList.add("hidden");
 }
 
 function setLobbyStatus(text) {
@@ -862,7 +873,12 @@ function setIdleRouteInfo(text) {
   }
 }
 
-function updateTurnStatus(players, currentTurn) {
+function updateTurnStatus(players, currentTurn, finalRoundActive, finalRoundTriggeredBy, isGameOver) {
+  if (isGameOver) {
+    setIdleRouteInfo("Game over");
+    return;
+  }
+
   const active = players[currentTurn] || null;
   if (!active) {
     setIdleRouteInfo("Select a route");
@@ -870,7 +886,13 @@ function updateTurnStatus(players, currentTurn) {
   }
 
   if (amPlayer && isMyTurn) {
-    setIdleRouteInfo("Select a route");
+    setIdleRouteInfo(finalRoundActive ? "Final round: take your last turn" : "Select a route");
+    return;
+  }
+
+  if (finalRoundActive) {
+    const trigger = finalRoundTriggeredBy ? ` (triggered by ${finalRoundTriggeredBy})` : "";
+    setIdleRouteInfo(`Final round${trigger}. Waiting for ${active.name}`);
     return;
   }
 
@@ -882,7 +904,8 @@ function render() {
   renderSvg(svg, currentMap, {
     labels: true,
     tickets: ticketCounts,
-    interactive: amPlayer && isMyTurn,
+    trainsRemaining: myTrainsRemaining,
+    interactive: amPlayer && isMyTurn && !gameOver,
   });
   wireRoutes();
   selectedEdgeId = null;
@@ -902,10 +925,10 @@ function drawFaceUp(faceUp) {
     img.dataset.color = name;
     img.dataset.index = String(i);
 
-    const canPick = amPlayer && isMyTurn && !(name === "rainbow" && turnDrawCount > 0);
+    const canPick = amPlayer && isMyTurn && !gameOver && !(name === "rainbow" && turnDrawCount > 0);
     if (canPick) {
       img.classList.add("clickable");
-    } else if (amPlayer && isMyTurn && name === "rainbow" && turnDrawCount > 0) {
+    } else if (amPlayer && isMyTurn && !gameOver && name === "rainbow" && turnDrawCount > 0) {
       img.classList.add("disabled");
     }
 
@@ -942,6 +965,11 @@ function canAffordTickets(tickets, routeColor, len) {
   return have >= len;
 }
 
+function canAffordRoute(tickets, trainsRemaining, routeColor, len) {
+  if ((trainsRemaining || 0) < len) return false;
+  return canAffordTickets(tickets, routeColor, len);
+}
+
 function possibleColors(tickets, routeColor, len) {
   const wild = tickets.rainbow || 0;
   if (routeColor === "gray") {
@@ -975,8 +1003,17 @@ function renderPlayers(players, currentTurn) {
     const name = document.createElement("div");
     name.className = "player-name";
     const score = p.score ?? 0;
+    const trains = p.trains ?? 0;
     const youTag = p.id === myPlayerId ? " (You)" : "";
-    name.textContent = `${p.name || p.color}${youTag} - ${score} pts`;
+    name.textContent = `${p.name || p.color}${youTag}`;
+
+    const points = document.createElement("div");
+    points.className = "player-points";
+    points.textContent = `${score} pts`;
+
+    const trainsLine = document.createElement("div");
+    trainsLine.className = "player-trains";
+    trainsLine.textContent = `${trains} trains left`;
 
     const tickets = document.createElement("div");
     tickets.className = "player-tickets";
@@ -990,11 +1027,47 @@ function renderPlayers(players, currentTurn) {
     tickets.appendChild(img);
     tickets.appendChild(count);
     info.appendChild(name);
+    info.appendChild(points);
+    info.appendChild(trainsLine);
     info.appendChild(tickets);
     row.appendChild(swatch);
     row.appendChild(info);
     playersListEl.appendChild(row);
   });
+}
+
+function renderGameOver(state) {
+  if (!gameOverModalEl || !standingsListEl || !gameOverSummaryEl) return;
+  const standings = Array.isArray(state?.standings) ? state.standings : [];
+  standingsListEl.innerHTML = "";
+  standings.forEach((entry, idx) => {
+    const row = document.createElement("div");
+    row.className = "standing-row";
+
+    const place = document.createElement("div");
+    place.className = "standing-place";
+    place.textContent = `#${idx + 1}`;
+
+    const name = document.createElement("div");
+    name.className = "standing-name";
+    const youTag = entry.id === myPlayerId ? " (You)" : "";
+    name.textContent = `${entry.name}${youTag}`;
+
+    const score = document.createElement("div");
+    score.className = "standing-score";
+    score.textContent = `${entry.score || 0} pts`;
+
+    row.appendChild(place);
+    row.appendChild(name);
+    row.appendChild(score);
+    standingsListEl.appendChild(row);
+  });
+
+  const trigger = state?.finalRoundTriggeredBy;
+  gameOverSummaryEl.textContent = trigger
+    ? `Final round was triggered by ${trigger}.`
+    : "Final round complete.";
+  gameOverModalEl.classList.remove("hidden");
 }
 
 function applyState(state) {
@@ -1008,27 +1081,31 @@ function applyState(state) {
   amPlayer = !!you.isPlayer;
   isMyTurn = !!you.isTurn;
   myPlayerId = you.playerId || null;
+  gameOver = !!state.gameOver;
 
   ticketCounts = { ...Object.fromEntries(CARD_ORDER.map((k) => [k, 0])), ...(state.tickets || {}) };
   currentMap = { cities: state.cities || [], edges: state.edges || [] };
-
-  render();
-  drawFaceUp(state.faceUp || []);
-  renderTicketPile();
 
   const players = (state.players || []).map((p, idx) => ({
     ...p,
     ticketTotal: (state.ticketTotals || [])[idx] || 0,
     score: (state.scores || [])[idx] || 0,
+    trains: p.trains ?? 0,
   }));
+  const myIdx = Number.isFinite(you.playerIndex) ? you.playerIndex : -1;
+  myTrainsRemaining = myIdx >= 0 ? (players[myIdx]?.trains ?? 0) : 0;
+
+  render();
+  drawFaceUp(state.faceUp || []);
+  renderTicketPile();
 
   const currentTurn = state.currentTurn ?? 0;
   renderPlayers(players, currentTurn);
-  updateTurnStatus(players, currentTurn);
+  updateTurnStatus(players, currentTurn, !!state.finalRoundActive, state.finalRoundTriggeredBy, gameOver);
 
   if (deckBackEl) {
     const empty = (state.deckRemaining ?? 1) <= 0;
-    if (!amPlayer || !isMyTurn) {
+    if (!amPlayer || !isMyTurn || gameOver) {
       deckBackEl.classList.remove("disabled");
       deckBackEl.classList.remove("clickable");
     } else if (empty) {
@@ -1040,8 +1117,14 @@ function applyState(state) {
     }
   }
 
-  if (!amPlayer || !isMyTurn) {
+  if (!amPlayer || !isMyTurn || gameOver) {
     closeColorModal();
+  }
+
+  if (gameOver) {
+    renderGameOver(state);
+  } else {
+    hideGameOverModal();
   }
 
   updateCardSizing();
@@ -1101,6 +1184,10 @@ function connectSocket() {
       if (msg.payload && msg.payload.gameStarted) {
         setGameVisibility(true);
       } else {
+        gameStarted = false;
+        gameOver = false;
+        hideGameOverModal();
+        closeColorModal();
         setGameVisibility(false);
       }
       return;
@@ -1170,8 +1257,13 @@ lobbyStartBtnEl?.addEventListener("click", () => {
   ws.send(JSON.stringify({ type: "start_game" }));
 });
 
+returnLobbyBtnEl?.addEventListener("click", () => {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  ws.send(JSON.stringify({ type: "return_to_lobby" }));
+});
+
 faceUpEl.addEventListener("click", (e) => {
-  if (!amPlayer || !isMyTurn) return;
+  if (!amPlayer || !isMyTurn || gameOver) return;
   const target = e.target;
   if (!(target instanceof HTMLImageElement)) return;
   if (target.classList.contains("disabled")) return;
@@ -1183,7 +1275,7 @@ faceUpEl.addEventListener("click", (e) => {
 });
 
 deckBackEl.addEventListener("click", () => {
-  if (!amPlayer || !isMyTurn) return;
+  if (!amPlayer || !isMyTurn || gameOver) return;
   if (deckBackEl.classList.contains("disabled")) return;
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ type: "draw_deck" }));
@@ -1192,7 +1284,7 @@ deckBackEl.addEventListener("click", () => {
 
 function wireRoutes() {
   const routes = svg.querySelectorAll(".route-color, .route-hit");
-  if (!amPlayer || !isMyTurn) return;
+  if (!amPlayer || !isMyTurn || gameOver) return;
 
   function setClassForEdge(edgeId, cls, on) {
     if (!edgeId) return;
@@ -1248,7 +1340,7 @@ svg.addEventListener("click", () => {
 });
 
 submitBtn.addEventListener("click", () => {
-  if (!amPlayer || !isMyTurn) return;
+  if (!amPlayer || !isMyTurn || gameOver) return;
   if (!selectedEdgeMeta || !selectedEdgeMeta.affordable || selectedEdgeMeta.claimed) return;
   const colors = possibleColors(ticketCounts, selectedEdgeMeta.routeColor, selectedEdgeMeta.len);
   if (colors.length <= 0) return;
@@ -1260,7 +1352,7 @@ submitBtn.addEventListener("click", () => {
 });
 
 function sendSubmitRoute(edgeId, color) {
-  if (!amPlayer || !isMyTurn) return;
+  if (!amPlayer || !isMyTurn || gameOver) return;
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ type: "submit_route", edgeId, color }));
   }
