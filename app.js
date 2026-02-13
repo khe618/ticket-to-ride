@@ -710,6 +710,7 @@ function renderSvg(svg, map, opts) {
     glow.setAttribute("cy", p.y);
     glow.setAttribute("r", 12);
     glow.setAttribute("class", "city-glow");
+    glow.dataset.cityId = String(c.id);
     cityGroup.appendChild(glow);
 
     const node = document.createElementNS("http://www.w3.org/2000/svg", "circle");
@@ -717,6 +718,7 @@ function renderSvg(svg, map, opts) {
     node.setAttribute("cy", p.y);
     node.setAttribute("r", 7);
     node.setAttribute("class", "city");
+    node.dataset.cityId = String(c.id);
     cityGroup.appendChild(node);
 
     if (opts.labels) {
@@ -724,6 +726,7 @@ function renderSvg(svg, map, opts) {
       label.setAttribute("x", p.x + 10);
       label.setAttribute("y", p.y - 10);
       label.setAttribute("class", "label");
+      label.dataset.cityId = String(c.id);
       label.textContent = c.name;
       cityGroup.appendChild(label);
     }
@@ -783,6 +786,11 @@ const gameOverModalEl = document.getElementById("gameOverModal");
 const gameOverSummaryEl = document.getElementById("gameOverSummary");
 const standingsListEl = document.getElementById("standingsList");
 const returnLobbyBtnEl = document.getElementById("returnLobbyBtn");
+const destinationTicketsListEl = document.getElementById("destinationTicketsList");
+const ticketSelectModalEl = document.getElementById("ticketSelectModal");
+const ticketSelectHintEl = document.getElementById("ticketSelectHint");
+const ticketSelectListEl = document.getElementById("ticketSelectList");
+const ticketSelectSubmitEl = document.getElementById("ticketSelectSubmit");
 
 let currentMap = null;
 let selectedEdgeId = null;
@@ -791,6 +799,13 @@ let pendingColor = null;
 let idleRouteInfoText = "Select a route";
 let ticketCounts = Object.fromEntries(CARD_ORDER.map((k) => [k, 0]));
 let myTrainsRemaining = 0;
+let destinationTickets = [];
+let destinationTicketResults = [];
+let activeDestinationTicketId = null;
+let pendingDestinationOffer = [];
+let selectedOfferTicketIds = new Set();
+let destinationTicketMinKeep = 2;
+let destinationSelectionPending = false;
 let ws = null;
 let turnDrawCount = 0;
 let isMyTurn = false;
@@ -809,6 +824,57 @@ function setGameVisibility(showGame) {
 
 function hideGameOverModal() {
   if (gameOverModalEl) gameOverModalEl.classList.add("hidden");
+}
+
+function closeTicketSelectModal() {
+  if (ticketSelectModalEl) ticketSelectModalEl.classList.add("hidden");
+  pendingDestinationOffer = [];
+  selectedOfferTicketIds = new Set();
+  destinationSelectionPending = false;
+}
+
+function clearCityHighlights() {
+  svg.querySelectorAll(".city-highlight").forEach((el) => el.classList.remove("city-highlight"));
+}
+
+function setHighlightedCities(cityIds) {
+  clearCityHighlights();
+  if (!Array.isArray(cityIds) || cityIds.length === 0) return;
+  cityIds.forEach((cityId) => {
+    svg
+      .querySelectorAll(`[data-city-id="${cityId}"]`)
+      .forEach((el) => el.classList.add("city-highlight"));
+  });
+}
+
+function findDestinationTicketById(ticketId) {
+  const ticket = destinationTickets.find((t) => t.id === ticketId);
+  if (ticket) return ticket;
+  return pendingDestinationOffer.find((t) => t.id === ticketId) || null;
+}
+
+function clearActiveDestinationTicket() {
+  activeDestinationTicketId = null;
+  clearCityHighlights();
+  document
+    .querySelectorAll(".destination-ticket-item.active")
+    .forEach((el) => el.classList.remove("active"));
+}
+
+function toggleDestinationTicketHighlight(ticketId, itemEl) {
+  if (!ticketId) return;
+  if (activeDestinationTicketId === ticketId) {
+    clearActiveDestinationTicket();
+    return;
+  }
+  const ticket = findDestinationTicketById(ticketId);
+  if (!ticket) return;
+  activeDestinationTicketId = ticketId;
+  document
+    .querySelectorAll(".destination-ticket-item.active")
+    .forEach((el) => el.classList.remove("active"));
+  if (itemEl) itemEl.classList.add("active");
+  setHighlightedCities([ticket.u, ticket.v]);
 }
 
 function setLobbyStatus(text) {
@@ -874,9 +940,25 @@ function setIdleRouteInfo(text) {
   }
 }
 
-function updateTurnStatus(players, currentTurn, finalRoundActive, finalRoundTriggeredBy, isGameOver) {
+function updateTurnStatus(
+  players,
+  currentTurn,
+  finalRoundActive,
+  finalRoundTriggeredBy,
+  isGameOver,
+  setupPhase,
+  awaitingTicketSelection
+) {
   if (isGameOver) {
     setIdleRouteInfo("Game over");
+    return;
+  }
+  if (setupPhase) {
+    if (amPlayer && awaitingTicketSelection) {
+      setIdleRouteInfo("Choose destination tickets");
+      return;
+    }
+    setIdleRouteInfo("Waiting for players to choose destination tickets");
     return;
   }
 
@@ -912,6 +994,10 @@ function render() {
   selectedEdgeMeta = null;
   submitBtn.disabled = true;
   routeInfo.textContent = idleRouteInfoText;
+  if (activeDestinationTicketId) {
+    const ticket = findDestinationTicketById(activeDestinationTicketId);
+    if (ticket) setHighlightedCities([ticket.u, ticket.v]);
+  }
 }
 
 function drawFaceUp(faceUp) {
@@ -953,6 +1039,115 @@ function renderTicketPile() {
     item.appendChild(badge);
     ticketPileEl.appendChild(item);
   }
+}
+
+function ticketResultById(ticketId) {
+  return destinationTicketResults.find((r) => r.id === ticketId) || null;
+}
+
+function destinationTicketLabel(ticket) {
+  if (!ticket || !currentMap || !currentMap.cities) return "Unknown route";
+  const from = currentMap.cities[ticket.u]?.name || `City ${ticket.u + 1}`;
+  const to = currentMap.cities[ticket.v]?.name || `City ${ticket.v + 1}`;
+  return `${from} - ${to}`;
+}
+
+function renderDestinationTickets() {
+  if (!destinationTicketsListEl) return;
+  destinationTicketsListEl.innerHTML = "";
+  if (!Array.isArray(destinationTickets) || destinationTickets.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "destination-ticket-empty";
+    empty.textContent = "No destination tickets selected.";
+    destinationTicketsListEl.appendChild(empty);
+    clearActiveDestinationTicket();
+    return;
+  }
+
+  destinationTickets.forEach((ticket) => {
+    const row = document.createElement("div");
+    row.className = "destination-ticket-item";
+    row.dataset.ticketId = ticket.id;
+    if (activeDestinationTicketId === ticket.id) {
+      row.classList.add("active");
+      setHighlightedCities([ticket.u, ticket.v]);
+    }
+    const result = ticketResultById(ticket.id);
+    const completion = result ? (result.completed ? " complete" : " incomplete") : "";
+
+    const name = document.createElement("div");
+    name.className = "destination-ticket-name";
+    name.textContent = destinationTicketLabel(ticket) + completion;
+
+    const points = document.createElement("div");
+    points.className = "destination-ticket-points";
+    points.textContent = `${ticket.points} pts`;
+
+    row.appendChild(name);
+    row.appendChild(points);
+    row.addEventListener("click", (e) => {
+      e.stopPropagation();
+      toggleDestinationTicketHighlight(ticket.id, row);
+    });
+    destinationTicketsListEl.appendChild(row);
+  });
+}
+
+function renderTicketSelectionList() {
+  if (!ticketSelectListEl) return;
+  ticketSelectListEl.innerHTML = "";
+  pendingDestinationOffer.forEach((ticket) => {
+    const row = document.createElement("div");
+    row.className = "destination-ticket-item";
+    row.dataset.ticketId = ticket.id;
+    const selected = selectedOfferTicketIds.has(ticket.id);
+    if (!selected) row.classList.add("unselected");
+    if (activeDestinationTicketId === ticket.id) {
+      row.classList.add("active");
+      setHighlightedCities([ticket.u, ticket.v]);
+    }
+
+    const name = document.createElement("div");
+    name.className = "destination-ticket-name";
+    name.textContent = destinationTicketLabel(ticket);
+
+    const points = document.createElement("div");
+    points.className = "destination-ticket-points";
+    points.textContent = `${ticket.points} pts`;
+
+    row.appendChild(name);
+    row.appendChild(points);
+    row.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (selectedOfferTicketIds.has(ticket.id)) {
+        selectedOfferTicketIds.delete(ticket.id);
+      } else {
+        selectedOfferTicketIds.add(ticket.id);
+      }
+      toggleDestinationTicketHighlight(ticket.id, row);
+      renderTicketSelectionList();
+      updateTicketSelectionSubmit();
+    });
+    ticketSelectListEl.appendChild(row);
+  });
+}
+
+function updateTicketSelectionSubmit() {
+  if (!ticketSelectSubmitEl) return;
+  ticketSelectSubmitEl.disabled = selectedOfferTicketIds.size < destinationTicketMinKeep;
+}
+
+function openTicketSelectModal(offer, minKeep) {
+  if (!ticketSelectModalEl) return;
+  pendingDestinationOffer = Array.isArray(offer) ? offer.slice() : [];
+  destinationTicketMinKeep = Number.isFinite(minKeep) ? minKeep : 2;
+  selectedOfferTicketIds = new Set(pendingDestinationOffer.map((ticket) => ticket.id));
+  if (ticketSelectHintEl) {
+    ticketSelectHintEl.textContent = `Keep at least ${destinationTicketMinKeep} tickets.`;
+  }
+  renderTicketSelectionList();
+  updateTicketSelectionSubmit();
+  ticketSelectModalEl.classList.remove("hidden");
 }
 
 function canAffordTickets(tickets, routeColor, len) {
@@ -1082,6 +1277,21 @@ function applyState(state) {
 
   ticketCounts = { ...Object.fromEntries(CARD_ORDER.map((k) => [k, 0])), ...(state.tickets || {}) };
   currentMap = { cities: state.cities || [], edges: state.edges || [] };
+  destinationTickets = Array.isArray(state.destinationTickets) ? state.destinationTickets.slice() : [];
+  destinationTicketResults = Array.isArray(state.destinationTicketResults) ? state.destinationTicketResults.slice() : [];
+  destinationSelectionPending = !!state.destinationSelectionPending;
+  destinationTicketMinKeep = Number.isFinite(state.destinationTicketMinKeep)
+    ? state.destinationTicketMinKeep
+    : 2;
+  const destinationOffer = Array.isArray(state.destinationOffer) ? state.destinationOffer.slice() : [];
+  if (
+    activeDestinationTicketId &&
+    !destinationTickets.some((t) => t.id === activeDestinationTicketId) &&
+    !destinationOffer.some((t) => t.id === activeDestinationTicketId)
+  ) {
+    activeDestinationTicketId = null;
+    clearCityHighlights();
+  }
 
   const players = (state.players || []).map((p, idx) => ({
     ...p,
@@ -1095,10 +1305,19 @@ function applyState(state) {
   render();
   drawFaceUp(state.faceUp || []);
   renderTicketPile();
+  renderDestinationTickets();
 
   const currentTurn = state.currentTurn ?? 0;
   renderPlayers(players, currentTurn);
-  updateTurnStatus(players, currentTurn, !!state.finalRoundActive, state.finalRoundTriggeredBy, gameOver);
+  updateTurnStatus(
+    players,
+    currentTurn,
+    !!state.finalRoundActive,
+    state.finalRoundTriggeredBy,
+    gameOver,
+    !!state.setupPhase,
+    destinationSelectionPending
+  );
 
   if (deckBackEl) {
     const empty = (state.deckRemaining ?? 1) <= 0;
@@ -1116,6 +1335,12 @@ function applyState(state) {
 
   if (!amPlayer || !isMyTurn || gameOver) {
     closeColorModal();
+  }
+
+  if (destinationSelectionPending && amPlayer && destinationOffer.length > 0) {
+    openTicketSelectModal(destinationOffer, destinationTicketMinKeep);
+  } else {
+    closeTicketSelectModal();
   }
 
   if (gameOver) {
@@ -1183,8 +1408,14 @@ function connectSocket() {
       } else {
         gameStarted = false;
         gameOver = false;
+        destinationTickets = [];
+        destinationTicketResults = [];
+        activeDestinationTicketId = null;
+        clearCityHighlights();
         hideGameOverModal();
         closeColorModal();
+        closeTicketSelectModal();
+        renderDestinationTickets();
         setGameVisibility(false);
       }
       return;
@@ -1259,6 +1490,16 @@ returnLobbyBtnEl?.addEventListener("click", () => {
   ws.send(JSON.stringify({ type: "return_to_lobby" }));
 });
 
+ticketSelectSubmitEl?.addEventListener("click", () => {
+  if (!destinationSelectionPending) return;
+  if (selectedOfferTicketIds.size < destinationTicketMinKeep) return;
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  ws.send(JSON.stringify({
+    type: "select_tickets",
+    keepTicketIds: [...selectedOfferTicketIds],
+  }));
+});
+
 faceUpEl.addEventListener("click", (e) => {
   if (!amPlayer || !isMyTurn || gameOver) return;
   const target = e.target;
@@ -1308,6 +1549,7 @@ function wireRoutes() {
     });
 
     el.addEventListener("click", (e) => {
+      clearActiveDestinationTicket();
       clearAll("route-selected");
       const edgeId = el.dataset.edgeId;
       setClassForEdge(edgeId, "route-selected", true);
@@ -1334,6 +1576,14 @@ svg.addEventListener("click", () => {
   selectedEdgeId = null;
   selectedEdgeMeta = null;
   submitBtn.disabled = true;
+  clearActiveDestinationTicket();
+});
+
+document.addEventListener("click", (e) => {
+  const target = e.target;
+  if (!(target instanceof Element)) return;
+  if (target.closest(".destination-ticket-item")) return;
+  clearActiveDestinationTicket();
 });
 
 submitBtn.addEventListener("click", () => {

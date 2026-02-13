@@ -59,7 +59,14 @@
         </div>
       </div>
       <div class="ticket-area" aria-label="Your tickets">
-        <div id="ticketPile" class="ticket-pile"></div>
+        <div class="ticket-block">
+          <div class="ticket-block-title">Train Cards</div>
+          <div id="ticketPile" class="ticket-pile"></div>
+        </div>
+        <div class="ticket-block">
+          <div class="ticket-block-title">Destination Tickets</div>
+          <div id="destinationTicketsList" class="destination-tickets-list"></div>
+        </div>
       </div>
     </div>
   </div>
@@ -82,6 +89,17 @@
       <div id="standingsList" class="standings-list"></div>
       <div class="modal-actions">
         <button id="returnLobbyBtn" class="modal-btn primary">Return to Lobby</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="ticketSelectModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="ticketSelectTitle">
+    <div class="modal-card ticket-select-card">
+      <div id="ticketSelectTitle" class="modal-title">Choose Destination Tickets</div>
+      <div id="ticketSelectHint" class="gameover-summary">Keep at least 2 tickets.</div>
+      <div id="ticketSelectList" class="destination-tickets-list selection"></div>
+      <div class="modal-actions">
+        <button id="ticketSelectSubmit" class="modal-btn primary" disabled>Confirm Selection</button>
       </div>
     </div>
   </div>

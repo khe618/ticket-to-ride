@@ -76,6 +76,9 @@ const ROUTE_POINTS = {
 
 const STARTING_TRAINS = 10;
 const FINAL_TURN_THRESHOLD = 2;
+const DESTINATION_TICKET_COUNT = 30;
+const DESTINATION_TICKET_OFFER_COUNT = 5;
+const DESTINATION_TICKET_MIN_KEEP = 2;
 
 const PLAYER_POOL = [
   { color: "red", hex: "#cc0000" },
@@ -531,6 +534,130 @@ function generateMap(params) {
   return { cities, edges: pruned };
 }
 
+function buildMapAdjacency(map) {
+  const adj = Array.from({ length: map.cities.length }, () => []);
+  for (const e of map.edges) {
+    adj[e.u].push({ to: e.v, len: e.len });
+    adj[e.v].push({ to: e.u, len: e.len });
+  }
+  return adj;
+}
+
+function shortestPathStatsByRoads(adj, source, target) {
+  const n = adj.length;
+  const bestRoads = Array(n).fill(Infinity);
+  const bestLen = Array(n).fill(Infinity);
+  const open = [{ node: source, roads: 0, len: 0 }];
+  bestRoads[source] = 0;
+  bestLen[source] = 0;
+
+  while (open.length > 0) {
+    open.sort((a, b) => a.roads - b.roads || a.len - b.len);
+    const current = open.shift();
+    if (!current) break;
+    const { node, roads, len } = current;
+    if (roads > bestRoads[node] || (roads === bestRoads[node] && len > bestLen[node])) {
+      continue;
+    }
+    if (node === target) {
+      return { roads, totalLength: len };
+    }
+    for (const next of adj[node]) {
+      const nextRoads = roads + 1;
+      const nextLen = len + next.len;
+      if (nextRoads < bestRoads[next.to] || (nextRoads === bestRoads[next.to] && nextLen < bestLen[next.to])) {
+        bestRoads[next.to] = nextRoads;
+        bestLen[next.to] = nextLen;
+        open.push({ node: next.to, roads: nextRoads, len: nextLen });
+      }
+    }
+  }
+  return null;
+}
+
+function assignDestinationTicketPoints(tickets) {
+  if (tickets.length === 0) return tickets;
+  if (tickets.length === 1) {
+    tickets[0].points = 5;
+    return tickets;
+  }
+  for (let i = 0; i < tickets.length; i++) {
+    const points = 5 + Math.floor((i * 20) / (tickets.length - 1));
+    tickets[i].points = clamp(points, 5, 25);
+  }
+  return tickets;
+}
+
+function generateDestinationTickets(map, count) {
+  const adj = buildMapAdjacency(map);
+  const candidates = [];
+
+  for (let u = 0; u < map.cities.length; u++) {
+    for (let v = u + 1; v < map.cities.length; v++) {
+      const stats = shortestPathStatsByRoads(adj, u, v);
+      if (!stats) continue;
+      if (stats.roads < 2) continue;
+      const difficulty = stats.roads * 1000 + stats.totalLength;
+      candidates.push({
+        u,
+        v,
+        minRoads: stats.roads,
+        minPathLength: stats.totalLength,
+        difficulty,
+      });
+    }
+  }
+
+  candidates.sort((a, b) =>
+    a.difficulty - b.difficulty ||
+    a.minRoads - b.minRoads ||
+    a.minPathLength - b.minPathLength ||
+    a.u - b.u ||
+    a.v - b.v
+  );
+
+  if (candidates.length < count) {
+    throw new Error('Not enough city pairs to generate destination tickets.');
+  }
+
+  const selected = [];
+  const used = new Set();
+  for (let i = 0; i < count; i++) {
+    let idx = Math.round((i * (candidates.length - 1)) / (count - 1));
+    while (used.has(idx) && idx < candidates.length - 1) idx += 1;
+    while (used.has(idx) && idx > 0) idx -= 1;
+    if (used.has(idx)) continue;
+    used.add(idx);
+    selected.push({ ...candidates[idx] });
+  }
+  if (selected.length < count) {
+    for (let i = 0; i < candidates.length && selected.length < count; i++) {
+      if (used.has(i)) continue;
+      used.add(i);
+      selected.push({ ...candidates[i] });
+    }
+  }
+
+  selected.sort((a, b) =>
+    a.difficulty - b.difficulty ||
+    a.minRoads - b.minRoads ||
+    a.minPathLength - b.minPathLength ||
+    a.u - b.u ||
+    a.v - b.v
+  );
+  assignDestinationTicketPoints(selected);
+
+  return selected.map((t, idx) => ({
+    id: `ticket-${idx + 1}`,
+    u: t.u,
+    v: t.v,
+    minRoads: t.minRoads,
+    minPathLength: t.minPathLength,
+    difficulty: t.difficulty,
+    points: t.points,
+  }));
+}
+
 function buildDeck() {
   const deck = [];
   for (const [name, count] of Object.entries(CARD_COUNTS)) {
@@ -560,10 +687,14 @@ function pickRandom(arr) {
 
 function initGame(players) {
   const map = generateMap(DEFAULTS);
+  const destinationTickets = generateDestinationTickets(map, DESTINATION_TICKET_COUNT);
   const deck = buildDeck();
   shuffleInPlace(rng, deck);
   const faceUp = deck.slice(0, 5);
   const ticketsByPlayer = players.map(() => Object.fromEntries(CARD_ORDER.map((k) => [k, 0])));
+  const destinationDeck = [...destinationTickets];
+  shuffleInPlace(rng, destinationDeck);
+  const destinationOffersByPlayer = players.map(() => destinationDeck.splice(0, DESTINATION_TICKET_OFFER_COUNT));
   const currentTurn = Math.floor(rng() * players.length);
   return {
     map,
@@ -571,6 +702,12 @@ function initGame(players) {
     deckIndex: 5,
     faceUp,
     ticketsByPlayer,
+    destinationTickets,
+    destinationDeck,
+    destinationOffersByPlayer,
+    destinationTicketsByPlayer: players.map(() => []),
+    destinationSelectionPendingByPlayer: players.map(() => true),
+    setupPhase: true,
     discard: [],
     players: players.map((p) => ({ ...p, connected: true, trains: STARTING_TRAINS })),
     currentTurn,
@@ -724,9 +861,46 @@ function startGame() {
   broadcastState();
 }
 
-function computeScores() {
+function buildClaimedAdjacencyForPlayer(playerColor) {
   if (!game) return [];
-  return game.players.map((p) => {
+  const adj = Array.from({ length: game.map.cities.length }, () => []);
+  for (const e of game.map.edges) {
+    if (e.claimedBy !== playerColor) continue;
+    adj[e.u].push(e.v);
+    adj[e.v].push(e.u);
+  }
+  return adj;
+}
+
+function hasPathBetweenCities(adj, source, target) {
+  if (source === target) return true;
+  const seen = new Set([source]);
+  const queue = [source];
+  while (queue.length > 0) {
+    const node = queue.shift();
+    const nextList = adj[node] || [];
+    for (const next of nextList) {
+      if (seen.has(next)) continue;
+      if (next === target) return true;
+      seen.add(next);
+      queue.push(next);
+    }
+  }
+  return false;
+}
+
+function getDestinationTicketResultForPlayer(playerIdx, ticket, cachedAdj) {
+  if (!game) return false;
+  const player = game.players[playerIdx];
+  if (!player || !ticket) return false;
+  const adj = cachedAdj || buildClaimedAdjacencyForPlayer(player.color);
+  return hasPathBetweenCities(adj, ticket.u, ticket.v);
+}
+
+function computeScores(options = {}) {
+  const includeDestinationTickets = !!options.includeDestinationTickets;
+  if (!game) return [];
+  const routeScores = game.players.map((p) => {
     let total = 0;
     for (const e of game.map.edges) {
       if (e.claimedBy === p.color) {
@@ -734,6 +908,19 @@ function computeScores() {
       }
     }
     return total;
+  });
+  if (!includeDestinationTickets) return routeScores;
+
+  return routeScores.map((routeScore, idx) => {
+    const tickets = game.destinationTicketsByPlayer[idx] || [];
+    if (tickets.length === 0) return routeScore;
+    const adj = buildClaimedAdjacencyForPlayer(game.players[idx].color);
+    let delta = 0;
+    for (const ticket of tickets) {
+      const completed = getDestinationTicketResultForPlayer(idx, ticket, adj);
+      delta += completed ? ticket.points : -ticket.points;
+    }
+    return routeScore + delta;
   });
 }
 
@@ -754,7 +941,7 @@ function endGame() {
   if (!game || game.gameOver) return;
   game.gameOver = true;
   game.turnDrawCount = 0;
-  const scores = computeScores();
+  const scores = computeScores({ includeDestinationTickets: true });
   game.standings = buildStandings(scores);
 }
 
@@ -847,9 +1034,22 @@ function getStateForClient(clientId) {
   const ticketTotals = game.ticketsByPlayer.map((counts) =>
     Object.values(counts).reduce((a, b) => a + b, 0)
   );
-  const scores = computeScores();
+  const scores = game.gameOver
+    ? computeScores({ includeDestinationTickets: true })
+    : computeScores({ includeDestinationTickets: false });
   const deckRemaining = Math.max(0, (game.deck.length - game.deckIndex) + game.discard.length);
   const finalRoundTriggeredByPlayer = game.players.find((p) => p.id === game.finalRoundTriggeredBy) || null;
+  const destinationTickets = playerIdx >= 0 ? (game.destinationTicketsByPlayer[playerIdx] || []) : [];
+  const destinationOffer = playerIdx >= 0 ? (game.destinationOffersByPlayer[playerIdx] || []) : [];
+  const destinationSelectionPending = playerIdx >= 0
+    ? !!game.destinationSelectionPendingByPlayer[playerIdx]
+    : false;
+  const destinationTicketResults = (playerIdx >= 0 && game.gameOver)
+    ? destinationTickets.map((ticket) => ({
+        id: ticket.id,
+        completed: getDestinationTicketResultForPlayer(playerIdx, ticket),
+      }))
+    : [];
   return {
     cities: game.map.cities,
     edges: game.map.edges,
@@ -866,9 +1066,15 @@ function getStateForClient(clientId) {
     finalRoundActive: game.finalRoundActive,
     finalRoundTriggeredBy: finalRoundTriggeredByPlayer ? finalRoundTriggeredByPlayer.name : null,
     standings: game.standings || [],
+    setupPhase: !!game.setupPhase,
+    destinationTickets,
+    destinationOffer: destinationSelectionPending ? destinationOffer : [],
+    destinationSelectionPending,
+    destinationTicketMinKeep: DESTINATION_TICKET_MIN_KEEP,
+    destinationTicketResults,
     you: {
       isPlayer: playerIdx >= 0,
-      isTurn: !game.gameOver && playerIdx >= 0 && playerIdx === game.currentTurn,
+      isTurn: !game.gameOver && !game.setupPhase && playerIdx >= 0 && playerIdx === game.currentTurn,
       playerIndex: playerIdx,
       playerId: playerIdx >= 0 ? game.players[playerIdx].id : null,
       name: playerIdx >= 0 ? game.players[playerIdx].name : null,
@@ -1027,7 +1233,59 @@ wss.on('connection', (ws) => {
 
     const playerIdx = getPlayerIndexForSocket(ws);
     if (playerIdx < 0) return;
+    if (msg.type === 'select_tickets') {
+      const offer = game.destinationOffersByPlayer[playerIdx] || [];
+      if (!game.destinationSelectionPendingByPlayer[playerIdx]) {
+        sendError(ws, 'You already selected destination tickets.');
+        return;
+      }
+      if (offer.length <= 0) {
+        sendError(ws, 'No destination tickets available to choose.');
+        return;
+      }
+      const keepIdsRaw = Array.isArray(msg.keepTicketIds) ? msg.keepTicketIds : [];
+      const keepIds = [...new Set(keepIdsRaw.map((v) => String(v || '')))].filter((v) => v);
+      if (keepIds.length < DESTINATION_TICKET_MIN_KEEP || keepIds.length > offer.length) {
+        sendError(ws, `Keep between ${DESTINATION_TICKET_MIN_KEEP} and ${offer.length} tickets.`);
+        return;
+      }
+      const offerById = new Map(offer.map((ticket) => [ticket.id, ticket]));
+      const kept = [];
+      for (const id of keepIds) {
+        const ticket = offerById.get(id);
+        if (!ticket) {
+          sendError(ws, 'Invalid destination ticket selection.');
+          return;
+        }
+        kept.push(ticket);
+      }
+      game.destinationTicketsByPlayer[playerIdx] = kept;
+      game.destinationOffersByPlayer[playerIdx] = [];
+      game.destinationSelectionPendingByPlayer[playerIdx] = false;
+
+      broadcastLog({
+        playerName: game.players[playerIdx].name,
+        message: game.players[playerIdx].name + ' chose destination tickets.',
+      });
+
+      if (game.destinationSelectionPendingByPlayer.every((pending) => !pending)) {
+        game.setupPhase = false;
+        broadcastLog({
+          message: 'All players chose destination tickets. The game has begun.',
+        });
+      }
+      broadcastState();
+      return;
+    }
     if (game.gameOver) return;
+    if (game.destinationSelectionPendingByPlayer[playerIdx]) {
+      sendError(ws, 'Choose your destination tickets first.');
+      return;
+    }
+    if (game.setupPhase) {
+      sendError(ws, 'Waiting for other players to choose destination tickets.');
+      return;
+    }
     if (playerIdx !== game.currentTurn) return;
 
     if (msg.type === 'draw_faceup') {
