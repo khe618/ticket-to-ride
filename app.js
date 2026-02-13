@@ -825,6 +825,7 @@ function refreshLobbyControls() {
 
 function renderLobby(payload) {
   const players = (payload && payload.players) || [];
+  const activeGame = !!payload?.activeGame;
   if (lobbyPlayersListEl) {
     lobbyPlayersListEl.innerHTML = "";
     players.forEach((p) => {
@@ -847,7 +848,7 @@ function renderLobby(payload) {
   lobbyCanJoin = !!(payload && payload.canJoin);
   lobbyCanStart = !!(payload && payload.canStart);
 
-  const showStart = !payload?.gameStarted && players.length >= 2;
+  const showStart = !activeGame && players.length >= 2;
   if (lobbyStartBtnEl) lobbyStartBtnEl.classList.toggle("hidden", !showStart);
 
   if (payload?.you) {
@@ -855,8 +856,8 @@ function renderLobby(payload) {
     if (lobbyNameInputEl && !lobbyNameInputEl.value) {
       lobbyNameInputEl.value = payload.you.name || "";
     }
-  } else if (payload?.gameStarted) {
-    setLobbyStatus("Game already in progress.");
+  } else if (activeGame) {
+    setLobbyStatus("Game in progress. You can wait in the lobby.");
   } else if (players.length >= (payload?.maxPlayers || 4)) {
     setLobbyStatus("Lobby is full.");
   } else {
@@ -891,8 +892,7 @@ function updateTurnStatus(players, currentTurn, finalRoundActive, finalRoundTrig
   }
 
   if (finalRoundActive) {
-    const trigger = finalRoundTriggeredBy ? ` (triggered by ${finalRoundTriggeredBy})` : "";
-    setIdleRouteInfo(`Final round${trigger}. Waiting for ${active.name}`);
+    setIdleRouteInfo(`Final round. Waiting for ${active.name}`);
     return;
   }
 
@@ -1063,10 +1063,7 @@ function renderGameOver(state) {
     standingsListEl.appendChild(row);
   });
 
-  const trigger = state?.finalRoundTriggeredBy;
-  gameOverSummaryEl.textContent = trigger
-    ? `Final round was triggered by ${trigger}.`
-    : "Final round complete.";
+  gameOverSummaryEl.textContent = "Final round complete.";
   gameOverModalEl.classList.remove("hidden");
 }
 

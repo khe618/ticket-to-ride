@@ -636,6 +636,16 @@ function getPlayerIndexForClient(clientId) {
   return game.players.findIndex((p) => p.id === clientId);
 }
 
+function shouldShowGameForClient(clientId) {
+  if (!gameStarted || !game) return false;
+  if (!game.gameOver) {
+    // Live games are visible to all connected clients, including spectators.
+    return true;
+  }
+  if (getLobbyPlayerIndex(clientId) >= 0) return false;
+  return getPlayerIndexForClient(clientId) >= 0;
+}
+
 function getPlayerIndexForSocket(ws) {
   const clientId = socketClientIds.get(ws);
   if (!clientId) return -1;
@@ -644,6 +654,7 @@ function getPlayerIndexForSocket(ws) {
 
 function buildLobbyPayload(clientId) {
   const you = lobbyPlayers.find((p) => p.id === clientId) || null;
+  const showGame = shouldShowGameForClient(clientId);
   return {
     players: lobbyPlayers.map((p) => ({
       id: p.id,
@@ -653,9 +664,10 @@ function buildLobbyPayload(clientId) {
     })),
     minPlayers: 2,
     maxPlayers: PLAYER_POOL.length,
-    canJoin: !gameStarted && !you && lobbyPlayers.length < PLAYER_POOL.length,
+    canJoin: !showGame && !you && lobbyPlayers.length < PLAYER_POOL.length,
     canStart: !gameStarted && lobbyPlayers.length >= 2,
-    gameStarted,
+    gameStarted: showGame,
+    activeGame: gameStarted,
     you,
   };
 }
@@ -677,26 +689,35 @@ function sendError(ws, message) {
   ws.send(JSON.stringify({ type: 'error', payload: { message } }));
 }
 
-function returnToLobby() {
-  const sourcePlayers = (game && game.players) ? game.players : lobbyPlayers;
-  const connected = sourcePlayers
-    .filter((p) => isClientConnected(p.id))
-    .map((p) => ({
-      id: p.id,
-      name: p.name,
-      color: p.color,
-      hex: p.hex,
-    }));
-  lobbyPlayers.splice(0, lobbyPlayers.length, ...connected);
+function addPlayerToLobby(player) {
+  if (!player) return;
+  if (getLobbyPlayerIndex(player.id) >= 0) return;
+  if (lobbyPlayers.length >= PLAYER_POOL.length) return;
+  lobbyPlayers.push({
+    id: player.id,
+    name: player.name,
+    color: player.color,
+    hex: player.hex,
+  });
+}
+
+function maybeFinishGameAfterReturns() {
+  if (!gameStarted || !game || !game.gameOver) return;
+  const everyoneReturnedOrGone = game.players.every((p) => {
+    if (!isClientConnected(p.id)) return true;
+    return getLobbyPlayerIndex(p.id) >= 0;
+  });
+  if (!everyoneReturnedOrGone) return;
   game = null;
   gameStarted = false;
-  broadcastLobby();
 }
 
 function startGame() {
   if (gameStarted) return;
   if (lobbyPlayers.length < 2) return;
-  game = initGame(lobbyPlayers);
+  const startingPlayers = lobbyPlayers.slice();
+  game = initGame(startingPlayers);
+  lobbyPlayers.splice(0, lobbyPlayers.length);
   gameStarted = true;
   maybeResetFaceUp();
   broadcastLobby();
@@ -859,6 +880,7 @@ function getStateForClient(clientId) {
 function sendState(ws) {
   const clientId = socketClientIds.get(ws);
   if (!clientId) return;
+  if (!shouldShowGameForClient(clientId)) return;
   const payload = getStateForClient(clientId);
   if (!payload) return;
   ws.send(JSON.stringify({ type: 'state', payload }));
@@ -943,12 +965,12 @@ wss.on('connection', (ws) => {
 
     if (msg.type === 'join_lobby') {
       const boundClientId = socketClientIds.get(ws) || '';
-      if (gameStarted) {
-        sendError(ws, 'Game already started.');
-        return;
-      }
       if (lobbyPlayers.length >= PLAYER_POOL.length) {
         sendError(ws, 'Lobby is full.');
+        return;
+      }
+      if (shouldShowGameForClient(boundClientId)) {
+        sendError(ws, 'Finish or return from your game first.');
         return;
       }
       if (getLobbyPlayerIndex(boundClientId) >= 0) {
@@ -992,7 +1014,12 @@ wss.on('connection', (ws) => {
 
     if (msg.type === 'return_to_lobby') {
       if (!gameStarted || !game || !game.gameOver) return;
-      returnToLobby();
+      const boundClientId = socketClientIds.get(ws) || '';
+      const playerIdx = getPlayerIndexForClient(boundClientId);
+      if (playerIdx < 0) return;
+      addPlayerToLobby(game.players[playerIdx]);
+      maybeFinishGameAfterReturns();
+      broadcastLobby();
       return;
     }
 
@@ -1124,7 +1151,7 @@ wss.on('connection', (ws) => {
         triggeredFinalRoundThisTurn = true;
         broadcastLog({
           playerName: player.name,
-          message: player.name + ' triggered the final round (2 or fewer trains left). Each player gets one final turn.',
+          message: 'Final round has begun. Each player gets one final turn.',
         });
       }
       advanceTurn({ tickFinalRound: !triggeredFinalRoundThisTurn });
@@ -1142,6 +1169,13 @@ wss.on('connection', (ws) => {
     const disconnectedClientId = unbindSocket(ws);
     if (!disconnectedClientId) return;
 
+    const lobbyIdx = getLobbyPlayerIndex(disconnectedClientId);
+    if (lobbyIdx >= 0) {
+      lobbyPlayers.splice(lobbyIdx, 1);
+      maybeFinishGameAfterReturns();
+      broadcastLobby();
+    }
+
     if (gameStarted && game) {
       const playerIdx = getPlayerIndexForClient(disconnectedClientId);
       if (playerIdx >= 0 && !isClientConnected(disconnectedClientId) && game.players[playerIdx].connected !== false) {
@@ -1150,14 +1184,11 @@ wss.on('connection', (ws) => {
           playerName: game.players[playerIdx].name,
           message: game.players[playerIdx].name + ' disconnected.',
         });
+        maybeFinishGameAfterReturns();
+        broadcastLobby();
       }
       return;
     }
-
-    const idx = getLobbyPlayerIndex(disconnectedClientId);
-    if (idx < 0) return;
-    lobbyPlayers.splice(idx, 1);
-    broadcastLobby();
   });
 });
 
