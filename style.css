@@ -76,6 +76,17 @@ img {
   justify-self: start;
   min-width: 150px;
 }
+.lobby-btn.howto {
+  background: #f1e4c9;
+  border-color: rgba(120, 90, 60, 0.45);
+  color: #4b3523;
+}
+.lobby-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
 .lobby-list-wrap {
   background: rgba(255, 248, 235, 0.9);
   border: 1px solid rgba(120, 90, 60, 0.35);
@@ -384,6 +395,19 @@ img {
   padding-top: 6px;
   border-top: 1px solid rgba(120, 90, 60, 0.25);
 }
+.wrap.initial-ticket-focus .top-right {
+  opacity: 0.38;
+  filter: saturate(0.75) brightness(0.9);
+  pointer-events: none;
+  transition: opacity 140ms ease, filter 140ms ease;
+}
+.ticket-select-panel.focus-emphasis {
+  border-top-color: rgba(165, 130, 45, 0.7);
+  background: rgba(255, 247, 221, 0.95);
+  border-radius: 10px;
+  padding: 10px;
+  box-shadow: 0 0 0 2px rgba(210, 168, 58, 0.32), 0 14px 26px rgba(82, 56, 16, 0.18);
+}
 .ticket-select-actions {
   display: flex;
   justify-content: flex-end;
@@ -670,6 +694,53 @@ img {
 .modal-btn:disabled {
   opacity: 0.6;
   cursor: not-allowed;
+}
+.howto-card {
+  width: min(760px, 96vw);
+  max-height: min(80vh, 760px);
+  overflow: auto;
+}
+.howto-content {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  font-size: 14px;
+  color: #4b3523;
+  line-height: 1.45;
+}
+.howto-content p {
+  margin: 0;
+}
+.howto-lead {
+  font-size: 15px;
+  font-weight: 700;
+  color: #3a2a1a;
+  background: rgba(255, 248, 235, 0.95);
+  border: 1px solid rgba(120, 90, 60, 0.28);
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+.howto-section {
+  background: rgba(255, 255, 255, 0.58);
+  border: 1px solid rgba(120, 90, 60, 0.2);
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+.howto-section h3 {
+  margin: 0 0 6px;
+  font-size: 15px;
+  color: #3a2a1a;
+  letter-spacing: 0.2px;
+}
+.howto-section ul {
+  margin: 0;
+  padding-left: 20px;
+}
+.howto-section li {
+  margin: 0 0 4px;
+}
+.howto-section li:last-child {
+  margin-bottom: 0;
 }
 .gameover-card {
   min-width: min(560px, 94vw);

@@ -18,7 +18,10 @@
         <div class="lobby-subtitle">Players</div>
         <div id="lobbyPlayersList" class="lobby-players-list"></div>
       </div>
-      <button id="lobbyStartBtn" class="lobby-btn start" type="button" disabled>Start Game</button>
+      <div class="lobby-actions">
+        <button id="lobbyHowToPlayBtn" class="lobby-btn howto" type="button">How to Play</button>
+        <button id="lobbyStartBtn" class="lobby-btn start" type="button" disabled>Start Game</button>
+      </div>
       <div id="lobbyStatus" class="lobby-status"></div>
     </div>
   </div>
@@ -96,6 +99,60 @@
       <div id="standingsList" class="standings-list"></div>
       <div class="modal-actions">
         <button id="returnLobbyBtn" class="modal-btn primary">Return to Lobby</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="howToPlayModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="howToPlayTitle">
+    <div class="modal-card howto-card">
+      <div id="howToPlayTitle" class="modal-title">How to Play</div>
+      <div class="howto-content">
+        <p class="howto-lead">Objective: score the most points by claiming routes and completing destination tickets.</p>
+
+        <section class="howto-section">
+          <h3>Setup</h3>
+          <ul>
+            <li>Each player starts with 45 trains.</li>
+            <li>You are dealt 5 destination tickets and must keep at least 2.</li>
+          </ul>
+        </section>
+
+        <section class="howto-section">
+          <h3>On Your Turn</h3>
+          <ul>
+            <li>Do one action: draw train cards, claim one route, or draw destination tickets.</li>
+            <li>If you draw destination tickets, draw up to 3 and keep at least 1. This ends your turn.</li>
+          </ul>
+        </section>
+
+        <section class="howto-section">
+          <h3>Claiming Routes</h3>
+          <ul>
+            <li>You must have enough matching cards and enough trains for that route length.</li>
+            <li>When you claim a route, place trains and gain route points.</li>
+            <li>Route scoring: length 1/2/3/4/5/6 gives 1/2/4/7/10/15 points.</li>
+          </ul>
+        </section>
+
+        <section class="howto-section">
+          <h3>Destination Tickets</h3>
+          <ul>
+            <li>A ticket is complete if your claimed routes connect the two ticket cities.</li>
+            <li>Completed tickets add their value. Incomplete tickets subtract their value.</li>
+          </ul>
+        </section>
+
+        <section class="howto-section">
+          <h3>End of Game</h3>
+          <ul>
+            <li>If a player ends a turn with 2 or fewer trains, the final round begins.</li>
+            <li>Every player gets one more turn, including the player who triggered it.</li>
+            <li>Globetrotter bonus: player(s) with the most completed tickets get +10 points.</li>
+          </ul>
+        </section>
+      </div>
+      <div class="modal-actions">
+        <button id="howToPlayCloseBtn" class="modal-btn primary" type="button">Close</button>
       </div>
     </div>
   </div>

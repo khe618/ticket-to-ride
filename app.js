@@ -765,6 +765,7 @@ const lobbyJoinFormEl = document.getElementById("lobbyJoinForm");
 const lobbyNameInputEl = document.getElementById("lobbyNameInput");
 const lobbyJoinBtnEl = document.getElementById("lobbyJoinBtn");
 const lobbyStartBtnEl = document.getElementById("lobbyStartBtn");
+const lobbyHowToPlayBtnEl = document.getElementById("lobbyHowToPlayBtn");
 const lobbyPlayersListEl = document.getElementById("lobbyPlayersList");
 const lobbyStatusEl = document.getElementById("lobbyStatus");
 
@@ -786,6 +787,8 @@ const gameOverModalEl = document.getElementById("gameOverModal");
 const gameOverSummaryEl = document.getElementById("gameOverSummary");
 const standingsListEl = document.getElementById("standingsList");
 const returnLobbyBtnEl = document.getElementById("returnLobbyBtn");
+const howToPlayModalEl = document.getElementById("howToPlayModal");
+const howToPlayCloseBtnEl = document.getElementById("howToPlayCloseBtn");
 const destinationTicketsListEl = document.getElementById("destinationTicketsList");
 const drawDestinationBtnEl = document.getElementById("drawDestinationBtn");
 const ticketSelectPanelEl = document.getElementById("ticketSelectPanel");
@@ -843,10 +846,19 @@ function playAudioSafe(audioEl) {
 function setGameVisibility(showGame) {
   if (gameWrapEl) gameWrapEl.classList.toggle("hidden", !showGame);
   if (lobbyScreenEl) lobbyScreenEl.classList.toggle("hidden", showGame);
+  if (showGame) hideHowToPlayModal();
 }
 
 function hideGameOverModal() {
   if (gameOverModalEl) gameOverModalEl.classList.add("hidden");
+}
+
+function showHowToPlayModal() {
+  if (howToPlayModalEl) howToPlayModalEl.classList.remove("hidden");
+}
+
+function hideHowToPlayModal() {
+  if (howToPlayModalEl) howToPlayModalEl.classList.add("hidden");
 }
 
 function closeTicketSelectModal() {
@@ -854,6 +866,11 @@ function closeTicketSelectModal() {
   pendingDestinationOffer = [];
   selectedOfferTicketIds = new Set();
   clearCityHighlights();
+}
+
+function setInitialTicketSelectionFocus(active) {
+  if (gameWrapEl) gameWrapEl.classList.toggle("initial-ticket-focus", !!active);
+  if (ticketSelectPanelEl) ticketSelectPanelEl.classList.toggle("focus-emphasis", !!active);
 }
 
 function refreshDestinationControls() {
@@ -1403,6 +1420,7 @@ function applyState(state) {
   } else {
     closeTicketSelectModal();
   }
+  setInitialTicketSelectionFocus(!!(setupPhase && destinationSelectionPending && amPlayer && destinationOffer.length > 0));
   refreshDestinationControls();
 
   if (gameOver) {
@@ -1479,6 +1497,7 @@ function connectSocket() {
         hideGameOverModal();
         closeColorModal();
         closeTicketSelectModal();
+        setInitialTicketSelectionFocus(false);
         renderDestinationTickets();
         refreshDestinationControls();
         setGameVisibility(false);
@@ -1557,6 +1576,26 @@ lobbyStartBtnEl?.addEventListener("click", () => {
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
   if (!lobbyCanStart) return;
   ws.send(JSON.stringify({ type: "start_game" }));
+});
+
+lobbyHowToPlayBtnEl?.addEventListener("click", () => {
+  showHowToPlayModal();
+});
+
+howToPlayCloseBtnEl?.addEventListener("click", () => {
+  hideHowToPlayModal();
+});
+
+howToPlayModalEl?.addEventListener("click", (e) => {
+  if (e.target === howToPlayModalEl) {
+    hideHowToPlayModal();
+  }
+});
+
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && howToPlayModalEl && !howToPlayModalEl.classList.contains("hidden")) {
+    hideHowToPlayModal();
+  }
 });
 
 returnLobbyBtnEl?.addEventListener("click", () => {
