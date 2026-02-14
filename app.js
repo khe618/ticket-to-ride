@@ -808,6 +808,7 @@ const ticketSelectPanelEl = document.getElementById("ticketSelectPanel");
 const ticketSelectHintEl = document.getElementById("ticketSelectHint");
 const ticketSelectListEl = document.getElementById("ticketSelectList");
 const ticketSelectSubmitEl = document.getElementById("ticketSelectSubmit");
+const colorBlindToggleEl = document.getElementById("colorBlindToggle");
 
 let currentMap = null;
 let selectedEdgeId = null;
@@ -839,7 +840,10 @@ let activeFaceUpDealAnimation = null;
 let lastSeenFaceUpReplacementSeq = null;
 let lastEdgeClaimsById = null;
 let routeBuildAnimationTimers = [];
+let pendingCardPickupAnimations = [];
+let ticketArrivalTimers = [];
 const CLIENT_TOKEN_KEY = "ticket_to_ride_client_token";
+const COLORBLIND_MODE_KEY = "ticket_to_ride_colorblind_mode";
 const ticketSelectAudio = new Audio("/sound/ticket_select.wav");
 ticketSelectAudio.preload = "auto";
 const routeBuildAudio = new Audio("/sound/route_build.wav");
@@ -848,6 +852,8 @@ const trainWhistleAudio = new Audio("/sound/train_whistle.wav");
 trainWhistleAudio.preload = "auto";
 const destinationTicketDrawAudio = new Audio("/sound/destination_ticket_draw.wav");
 destinationTicketDrawAudio.preload = "auto";
+const turnNotificationAudio = new Audio("/sound/turn_notification.wav");
+turnNotificationAudio.preload = "auto";
 
 function getRoomNameFromPath() {
   const parts = window.location.pathname.split("/").filter(Boolean);
@@ -942,6 +948,43 @@ function hideGameOverModal() {
   if (gameOverModalEl) gameOverModalEl.classList.add("hidden");
 }
 
+const COLOR_ASSIST_LABELS = {
+  red: "R",
+  blue: "B",
+  green: "G",
+  yellow: "Y",
+  black: "K",
+  white: "W",
+  orange: "O",
+  pink: "P",
+  rainbow: "*",
+  gray: "GY",
+};
+
+function colorAssistLabel(color) {
+  const key = String(color || "").toLowerCase();
+  return COLOR_ASSIST_LABELS[key] || key.slice(0, 2).toUpperCase();
+}
+
+function makeColorAssistTag(color) {
+  const tag = document.createElement("span");
+  tag.className = "color-assist-tag";
+  tag.textContent = colorAssistLabel(color);
+  tag.setAttribute("aria-hidden", "true");
+  return tag;
+}
+
+function applyColorBlindMode(enabled) {
+  const on = !!enabled;
+  document.body.classList.toggle("colorblind-mode", on);
+  if (colorBlindToggleEl) colorBlindToggleEl.checked = on;
+  try {
+    window.localStorage.setItem(COLORBLIND_MODE_KEY, on ? "1" : "0");
+  } catch (err) {
+    // ignore storage failures
+  }
+}
+
 function showGameOverModal() {
   if (gameOverModalEl) gameOverModalEl.classList.remove("hidden");
 }
@@ -984,6 +1027,7 @@ function refreshDestinationControls() {
     !gameOver &&
     !setupPhase &&
     !destinationSelectionPending &&
+    turnDrawCount === 0 &&
     destinationTicketsRemaining > 0;
   drawDestinationBtnEl.disabled = !canDraw;
   drawDestinationBtnEl.textContent = destinationTicketsRemaining > 0
@@ -993,6 +1037,10 @@ function refreshDestinationControls() {
 
 function canTakeTurnActions() {
   return amPlayer && isMyTurn && !gameOver && !setupPhase && !destinationSelectionPending;
+}
+
+function canTakeNonDrawTurnActions() {
+  return canTakeTurnActions() && turnDrawCount === 0;
 }
 
 function setHighlightedCities(cityIds) {
@@ -1119,7 +1167,7 @@ function render() {
     labels: true,
     tickets: ticketCounts,
     trainsRemaining: myTrainsRemaining,
-    interactive: canTakeTurnActions(),
+    interactive: canTakeNonDrawTurnActions(),
   });
   wireRoutes();
   selectedEdgeId = null;
@@ -1254,6 +1302,8 @@ function drawFaceUp(faceUp, animatedReplacementIndex = -1) {
   faceUpEl.innerHTML = "";
   for (let i = 0; i < faceUp.length; i++) {
     const name = faceUp[i];
+    const shell = document.createElement("div");
+    shell.className = "face-up-card-shell";
     const img = document.createElement("img");
     img.className = "card";
     img.alt = `${name} card`;
@@ -1268,7 +1318,9 @@ function drawFaceUp(faceUp, animatedReplacementIndex = -1) {
       img.classList.add("disabled");
     }
 
-    faceUpEl.appendChild(img);
+    shell.appendChild(img);
+    shell.appendChild(makeColorAssistTag(name));
+    faceUpEl.appendChild(shell);
   }
 
   if (animatedReplacementIndex >= 0) {
@@ -1360,6 +1412,148 @@ function animateClaimedRoutes(edgeIds) {
   });
 }
 
+function snapshotRect(el) {
+  if (!(el instanceof Element)) return null;
+  const rect = el.getBoundingClientRect();
+  if (rect.width <= 0 || rect.height <= 0) return null;
+  return {
+    left: rect.left,
+    top: rect.top,
+    width: rect.width,
+    height: rect.height,
+  };
+}
+
+function queuePendingCardPickup(sourceEl, cardImageSrc) {
+  const sourceRect = snapshotRect(sourceEl);
+  if (!sourceRect) return;
+  pendingCardPickupAnimations.push({
+    sourceRect,
+    cardImageSrc: String(cardImageSrc || "/img/back.png"),
+    requestedAt: Date.now(),
+  });
+}
+
+function prunePendingCardPickupAnimations(maxAgeMs = 5000) {
+  const now = Date.now();
+  pendingCardPickupAnimations = pendingCardPickupAnimations.filter((entry) =>
+    (now - (entry.requestedAt || 0)) <= maxAgeMs
+  );
+}
+
+function clearCardPickupAnimationState(clearPending = true) {
+  if (clearPending) {
+    pendingCardPickupAnimations = [];
+  }
+  if (ticketArrivalTimers.length > 0) {
+    ticketArrivalTimers.forEach((timerId) => window.clearTimeout(timerId));
+    ticketArrivalTimers = [];
+  }
+  ticketPileEl?.querySelectorAll(".ticket-arrive").forEach((el) => el.classList.remove("ticket-arrive"));
+  document.querySelectorAll(".ticket-transfer-fly").forEach((el) => el.remove());
+}
+
+function getSingleCardGainColor(prevCounts, nextCounts) {
+  if (!prevCounts || !nextCounts) return "";
+  let totalDelta = 0;
+  let gainColor = "";
+  for (const color of CARD_ORDER) {
+    const prev = Number(prevCounts[color] || 0);
+    const next = Number(nextCounts[color] || 0);
+    const delta = next - prev;
+    totalDelta += delta;
+    if (delta < 0) return "";
+    if (delta > 0) {
+      if (delta !== 1 || gainColor) return "";
+      gainColor = color;
+    }
+  }
+  return totalDelta === 1 ? gainColor : "";
+}
+
+function markTicketPileArrival(color) {
+  if (!ticketPileEl || !color) return;
+  const item = ticketPileEl.querySelector(`.ticket-item[data-color="${color}"]`);
+  if (!(item instanceof HTMLElement)) return;
+  item.classList.add("ticket-arrive");
+  const timerId = window.setTimeout(() => {
+    item.classList.remove("ticket-arrive");
+    ticketArrivalTimers = ticketArrivalTimers.filter((id) => id !== timerId);
+  }, 320);
+  ticketArrivalTimers.push(timerId);
+}
+
+function animateCardPickupToTicketPile(drawRequest, gainedColor) {
+  if (!drawRequest || !gainedColor || !ticketPileEl) return;
+  markTicketPileArrival(gainedColor);
+  if (typeof window.matchMedia === "function" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    return;
+  }
+
+  const sourceRect = drawRequest.sourceRect || null;
+  const targetImg = ticketPileEl.querySelector(`.ticket-item[data-color="${gainedColor}"] img`);
+  const targetRect = snapshotRect(targetImg || ticketPileEl);
+  if (!sourceRect || !targetRect) return;
+
+  const mover = document.createElement("img");
+  mover.className = "card ticket-transfer-fly";
+  mover.src = drawRequest.cardImageSrc || `/img/${gainedColor}.png`;
+  mover.alt = "";
+  mover.setAttribute("aria-hidden", "true");
+  mover.style.position = "fixed";
+  mover.style.left = `${sourceRect.left}px`;
+  mover.style.top = `${sourceRect.top}px`;
+  mover.style.width = `${sourceRect.width}px`;
+  mover.style.height = `${sourceRect.height}px`;
+  mover.style.pointerEvents = "none";
+  mover.style.zIndex = "1250";
+  mover.style.margin = "0";
+  document.body.appendChild(mover);
+
+  const fromCx = sourceRect.left + sourceRect.width / 2;
+  const fromCy = sourceRect.top + sourceRect.height / 2;
+  const toCx = targetRect.left + targetRect.width / 2;
+  const toCy = targetRect.top + targetRect.height / 2;
+  const dx = toCx - fromCx;
+  const dy = toCy - fromCy;
+  const sx = Math.max(0.55, Math.min(1.1, targetRect.width / sourceRect.width));
+  const sy = Math.max(0.55, Math.min(1.1, targetRect.height / sourceRect.height));
+
+  if (typeof mover.animate !== "function") {
+    mover.remove();
+    return;
+  }
+
+  const animation = mover.animate(
+    [
+      { transform: "translate(0px, 0px) scale(1, 1)", opacity: 1 },
+      { transform: `translate(${dx}px, ${dy}px) scale(${sx}, ${sy})`, opacity: 0.98 },
+    ],
+    {
+      duration: 430,
+      easing: "cubic-bezier(0.2, 0.75, 0.25, 1)",
+      fill: "forwards",
+    }
+  );
+  animation.onfinish = () => {
+    if (mover.isConnected) mover.remove();
+  };
+  animation.oncancel = () => {
+    if (mover.isConnected) mover.remove();
+  };
+}
+
+function maybeAnimatePendingCardPickup(prevCounts, nextCounts) {
+  if (pendingCardPickupAnimations.length <= 0) return;
+  prunePendingCardPickupAnimations();
+  if (pendingCardPickupAnimations.length <= 0) return;
+  const gainedColor = getSingleCardGainColor(prevCounts, nextCounts);
+  if (!gainedColor) return;
+  const drawRequest = pendingCardPickupAnimations.shift();
+  animateCardPickupToTicketPile(drawRequest, gainedColor);
+}
+
 function renderTicketPile() {
   ticketPileEl.innerHTML = "";
   for (const color of CARD_ORDER) {
@@ -1367,6 +1561,7 @@ function renderTicketPile() {
     if (count <= 0) continue;
     const item = document.createElement("div");
     item.className = "ticket-item";
+    item.dataset.color = color;
     const img = document.createElement("img");
     img.src = `/img/${color}.png`;
     img.alt = `${color} ticket`;
@@ -1375,6 +1570,7 @@ function renderTicketPile() {
     badge.className = "ticket-count";
     badge.textContent = String(count);
     item.appendChild(badge);
+    item.appendChild(makeColorAssistTag(color));
     ticketPileEl.appendChild(item);
   }
 }
@@ -1674,6 +1870,8 @@ function renderGameOver(state) {
 
 function applyState(state) {
   if (!state) return;
+  const couldTakeTurnActions = canTakeTurnActions();
+  const prevTicketCounts = { ...ticketCounts };
   const nextEdges = Array.isArray(state.edges) ? state.edges : [];
   const newlyClaimedEdgeIds = findNewlyClaimedEdgeIds(lastEdgeClaimsById, nextEdges);
   const nextFaceUp = Array.isArray(state.faceUp) ? state.faceUp.slice() : [];
@@ -1722,6 +1920,10 @@ function applyState(state) {
     ? state.destinationTicketMinKeep
     : 2;
   const destinationOffer = Array.isArray(state.destinationOffer) ? state.destinationOffer.slice() : [];
+  const canTakeTurnActionsNow = canTakeTurnActions();
+  if (!couldTakeTurnActions && canTakeTurnActionsNow) {
+    playAudioSafe(turnNotificationAudio);
+  }
 
   const players = (state.players || []).map((p, idx) => ({
     ...p,
@@ -1741,6 +1943,7 @@ function applyState(state) {
   lastSeenFaceUpReplacementSeq = hasServerFaceUpReplacementSignal ? nextFaceUpReplacementSeq : null;
   lastEdgeClaimsById = buildEdgeClaimsMap(nextEdges);
   renderTicketPile();
+  maybeAnimatePendingCardPickup(prevTicketCounts, ticketCounts);
   renderDestinationTickets();
 
   const currentTurn = state.currentTurn ?? 0;
@@ -1769,7 +1972,7 @@ function applyState(state) {
     }
   }
 
-  if (!amPlayer || !isMyTurn || gameOver) {
+  if (!amPlayer || !isMyTurn || gameOver || turnDrawCount > 0) {
     closeColorModal();
   }
 
@@ -1868,6 +2071,7 @@ function connectSocket() {
         lastEdgeClaimsById = null;
         clearFaceUpDealAnimation();
         clearRouteBuildAnimations();
+        clearCardPickupAnimationState();
         renderDestinationTickets();
         refreshDestinationControls();
         applyChatInputAccess();
@@ -2018,7 +2222,7 @@ gameOverCloseBtnEl?.addEventListener("click", () => {
 });
 
 drawDestinationBtnEl?.addEventListener("click", () => {
-  if (!canTakeTurnActions()) return;
+  if (!canTakeNonDrawTurnActions()) return;
   if (destinationTicketsRemaining <= 0) return;
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
   ws.send(JSON.stringify({ type: "draw_destination_tickets" }));
@@ -2042,6 +2246,7 @@ faceUpEl.addEventListener("click", (e) => {
   const idx = Number(target.dataset.index);
   if (!Number.isFinite(idx)) return;
   if (ws && ws.readyState === WebSocket.OPEN) {
+    queuePendingCardPickup(target, target.getAttribute("src") || `/img/${target.dataset.color || "back"}.png`);
     ws.send(JSON.stringify({ type: "draw_faceup", index: idx }));
   }
 });
@@ -2050,13 +2255,14 @@ deckBackEl.addEventListener("click", () => {
   if (!canTakeTurnActions()) return;
   if (deckBackEl.classList.contains("disabled")) return;
   if (ws && ws.readyState === WebSocket.OPEN) {
+    queuePendingCardPickup(deckBackEl, deckBackEl.getAttribute("src") || "/img/back.png");
     ws.send(JSON.stringify({ type: "draw_deck" }));
   }
 });
 
 function wireRoutes() {
   const routes = svg.querySelectorAll(".route-color, .route-hit");
-  if (!canTakeTurnActions()) return;
+  if (!canTakeNonDrawTurnActions()) return;
 
   function setClassForEdge(edgeId, cls, on) {
     if (!edgeId) return;
@@ -2113,7 +2319,7 @@ svg.addEventListener("click", () => {
 });
 
 submitBtn.addEventListener("click", () => {
-  if (!canTakeTurnActions()) return;
+  if (!canTakeNonDrawTurnActions()) return;
   if (!selectedEdgeMeta || !selectedEdgeMeta.affordable || selectedEdgeMeta.claimed) return;
   const colors = possibleColors(ticketCounts, selectedEdgeMeta.routeColor, selectedEdgeMeta.len);
   if (colors.length <= 0) return;
@@ -2125,7 +2331,7 @@ submitBtn.addEventListener("click", () => {
 });
 
 function sendSubmitRoute(edgeId, color) {
-  if (!canTakeTurnActions()) return;
+  if (!canTakeNonDrawTurnActions()) return;
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ type: "submit_route", edgeId, color }));
   }
@@ -2142,6 +2348,7 @@ function openColorModal(colors) {
     img.src = `/img/${c}.png`;
     img.alt = `${c} ticket`;
     opt.appendChild(img);
+    opt.appendChild(makeColorAssistTag(c));
     opt.addEventListener("click", () => {
       colorOptionsEl.querySelectorAll(".modal-option").forEach((el) => el.classList.remove("selected"));
       opt.classList.add("selected");
@@ -2168,6 +2375,18 @@ colorSubmitEl.addEventListener("click", () => {
   sendSubmitRoute(selectedEdgeMeta.edgeId, pendingColor);
   closeColorModal();
 });
+
+colorBlindToggleEl?.addEventListener("change", () => {
+  applyColorBlindMode(!!colorBlindToggleEl.checked);
+});
+
+let storedColorBlindMode = false;
+try {
+  storedColorBlindMode = window.localStorage.getItem(COLORBLIND_MODE_KEY) === "1";
+} catch (err) {
+  storedColorBlindMode = false;
+}
+applyColorBlindMode(storedColorBlindMode);
 
 setGameVisibility(false);
 refreshLobbyControls();

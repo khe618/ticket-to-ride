@@ -232,6 +232,21 @@ img {
   font-weight: 700;
   letter-spacing: 0.3px;
 }
+.colorblind-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #3e2a14;
+  user-select: none;
+}
+.colorblind-toggle input {
+  margin: 0;
+  width: 14px;
+  height: 14px;
+  accent-color: #3a6f31;
+}
 .route-info {
   font-size: 12px;
   color: #4b3523;
@@ -534,6 +549,14 @@ img {
 .face-up {
   display: contents;
 }
+.face-up-card-shell {
+  position: relative;
+  width: var(--card-size);
+  justify-self: center;
+}
+.face-up-card-shell .card {
+  width: 100%;
+}
 .card {
   width: var(--card-size);
   height: auto;
@@ -738,11 +761,20 @@ img {
   position: relative;
   width: 100%;
   height: calc(var(--ticket-size) * 1.4);
+  border: 1px solid transparent;
   border-radius: 10px;
   display: grid;
   place-items: center;
   justify-self: center;
   opacity: 0.95;
+  transition: transform 160ms ease, box-shadow 160ms ease, border-color 160ms ease, opacity 160ms ease;
+}
+.ticket-item.ticket-arrive {
+  transform: translateY(-2px) scale(1.04);
+  border-color: rgba(201, 143, 24, 0.95);
+  box-shadow:
+    0 0 0 2px rgba(255, 216, 120, 0.65),
+    0 10px 20px rgba(70, 44, 14, 0.28);
 }
 .ticket-item.empty {
   opacity: 0.35;
@@ -755,6 +787,9 @@ img {
   transform-origin: center;
   border-radius: 10px;
   box-shadow: 0 6px 12px rgba(60, 40, 20, 0.35);
+}
+.ticket-transfer-fly {
+  box-shadow: 0 12px 24px rgba(58, 36, 12, 0.45);
 }
 .ticket-count {
   position: absolute;
@@ -893,6 +928,81 @@ img {
   stroke: rgba(120, 90, 60, 0.18);
   stroke-width: 1;
 }
+.color-assist-tag {
+  position: absolute;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  border-radius: 999px;
+  border: 1px solid rgba(18, 12, 4, 0.9);
+  background: rgba(255, 245, 219, 0.96);
+  color: #23150a;
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: 0.25px;
+  text-transform: uppercase;
+  pointer-events: none;
+  z-index: 5;
+}
+.face-up-card-shell .color-assist-tag {
+  top: 6px;
+  left: 6px;
+}
+.ticket-item .color-assist-tag {
+  top: 6px;
+  left: 6px;
+}
+.modal-option .color-assist-tag {
+  top: 6px;
+  left: 6px;
+}
+.colorblind-mode .color-assist-tag {
+  display: inline-flex;
+}
+.colorblind-mode .route-seg {
+  stroke: rgba(18, 12, 4, 0.95);
+  stroke-width: 2;
+}
+.colorblind-mode .route-color[data-route-color="red"],
+.colorblind-mode .route-seg[data-route-color="red"] {
+  stroke-dasharray: none;
+}
+.colorblind-mode .route-color[data-route-color="blue"],
+.colorblind-mode .route-seg[data-route-color="blue"] {
+  stroke-dasharray: 20 10;
+}
+.colorblind-mode .route-color[data-route-color="green"],
+.colorblind-mode .route-seg[data-route-color="green"] {
+  stroke-dasharray: 8 8;
+}
+.colorblind-mode .route-color[data-route-color="yellow"],
+.colorblind-mode .route-seg[data-route-color="yellow"] {
+  stroke-dasharray: 3 7;
+}
+.colorblind-mode .route-color[data-route-color="black"],
+.colorblind-mode .route-seg[data-route-color="black"] {
+  stroke-dasharray: 26 8 6 8;
+}
+.colorblind-mode .route-color[data-route-color="white"],
+.colorblind-mode .route-seg[data-route-color="white"] {
+  stroke-dasharray: 2 8 2 14;
+}
+.colorblind-mode .route-color[data-route-color="orange"],
+.colorblind-mode .route-seg[data-route-color="orange"] {
+  stroke-dasharray: 14 5 4 5;
+}
+.colorblind-mode .route-color[data-route-color="pink"],
+.colorblind-mode .route-seg[data-route-color="pink"] {
+  stroke-dasharray: 6 4;
+}
+.colorblind-mode .route-color[data-route-color="gray"],
+.colorblind-mode .route-seg[data-route-color="gray"] {
+  stroke-dasharray: 10 6;
+}
 
 .modal {
   position: fixed;
@@ -924,6 +1034,7 @@ img {
   flex-wrap: wrap;
 }
 .modal-option {
+  position: relative;
   border: 2px solid transparent;
   border-radius: 10px;
   padding: 4px;

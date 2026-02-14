@@ -100,7 +100,7 @@ const ROUTE_POINTS = {
   6: 15,
 };
 
-const STARTING_TRAINS = 45;
+const STARTING_TRAINS = 40;
 const STARTING_TRAIN_CARDS = 4;
 const FINAL_TURN_THRESHOLD = 2;
 const DESTINATION_TICKET_COUNT = 30;
@@ -1623,6 +1623,10 @@ wss.on('connection', (ws, req) => {
         sendError(ws, 'Choose your destination tickets first.');
         return;
       }
+      if (game.turnDrawCount > 0) {
+        sendError(ws, 'You cannot draw destination tickets after drawing train cards this turn.');
+        return;
+      }
       const offer = drawDestinationOffer(DESTINATION_TICKET_DRAW_COUNT);
       if (offer.length <= 0) {
         sendError(ws, 'No destination tickets remain.');
@@ -1708,6 +1712,10 @@ wss.on('connection', (ws, req) => {
       }
 
       if (msg.type === 'submit_route') {
+      if (game.turnDrawCount > 0) {
+        sendError(ws, 'You cannot claim a route after drawing train cards this turn.');
+        return;
+      }
       const rawEdgeId = String(msg.edgeId || '');
       const chosen = String(msg.color || '');
       const edgeId = normalizeEdgeId(rawEdgeId);
