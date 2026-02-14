@@ -215,6 +215,8 @@ function generateCities(rng, N, bounds) {
     "Velden",
     "Mirewood",
     "Solmar",
+    "Briarwick",
+    "Corhaven",
   ];
 
   const cities = points.slice(0, N).map((p, i) => ({

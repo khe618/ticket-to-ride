@@ -43,13 +43,16 @@ const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 const chance = new Chance();
 
-const DEFAULTS = {
-  nCities: 35,
-  eTarget: 70,
+const BASE_MAP_DEFAULTS = {
   kNN: 5,
   maxDeg: 6,
   pGray: 0.25,
   labels: true,
+};
+const CITIES_BY_PLAYER_COUNT = {
+  2: 33,
+  3: 35,
+  4: 37,
 };
 
 const ROUTE_COLORS = [
@@ -103,10 +106,10 @@ const ROUTE_POINTS = {
 const STARTING_TRAINS = 40;
 const STARTING_TRAIN_CARDS = 4;
 const FINAL_TURN_THRESHOLD = 2;
-const DESTINATION_TICKET_COUNT = 30;
+const DESTINATION_TICKET_COUNT = 40;
 const DESTINATION_TICKET_OFFER_COUNT = 5;
 const DESTINATION_TICKET_MIN_KEEP = 2;
-const DESTINATION_TICKET_DRAW_COUNT = 3;
+const DESTINATION_TICKET_DRAW_COUNT = 4;
 const DESTINATION_TICKET_DRAW_MIN_KEEP = 1;
 const GLOBETROTTER_BONUS_POINTS = 10;
 const LONGEST_ROAD_BONUS_POINTS = 15;
@@ -309,6 +312,8 @@ function generateCities(rand, N, bounds) {
     "Velden",
     "Mirewood",
     "Solmar",
+    "Briarwick",
+    "Corhaven",
   ];
 
   const cities = points.slice(0, N).map((p, i) => ({
@@ -610,13 +615,30 @@ function shortestPathStatsByRoads(adj, source, target) {
 
 function assignDestinationTicketPoints(tickets) {
   if (tickets.length === 0) return tickets;
+
+  const pointSchedule = [];
+  for (let points = 6; points <= 15; points++) {
+    pointSchedule.push(points, points, points);
+  }
+  for (let points = 16; points <= 25; points++) {
+    pointSchedule.push(points);
+  }
+
+  if (tickets.length === pointSchedule.length) {
+    for (let i = 0; i < tickets.length; i++) {
+      tickets[i].points = pointSchedule[i];
+    }
+    return tickets;
+  }
+
+  // Fallback for non-standard ticket counts while preserving monotonicity.
   if (tickets.length === 1) {
-    tickets[0].points = 5;
+    tickets[0].points = 6;
     return tickets;
   }
   for (let i = 0; i < tickets.length; i++) {
-    const points = 5 + Math.floor((i * 20) / (tickets.length - 1));
-    tickets[i].points = clamp(points, 5, 25);
+    const points = 6 + Math.floor((i * 19) / (tickets.length - 1));
+    tickets[i].points = clamp(points, 6, 25);
   }
   return tickets;
 }
@@ -731,8 +753,17 @@ function pickRandom(arr) {
   return arr[Math.floor(rng() * arr.length)] || null;
 }
 
+function getMapParamsForPlayerCount(playerCount) {
+  const count = CITIES_BY_PLAYER_COUNT[playerCount] || CITIES_BY_PLAYER_COUNT[3];
+  return {
+    ...BASE_MAP_DEFAULTS,
+    nCities: count,
+    eTarget: count * 2,
+  };
+}
+
 function initGame(players) {
-  const map = generateMap(DEFAULTS);
+  const map = generateMap(getMapParamsForPlayerCount(players.length));
   const destinationTickets = generateDestinationTickets(map, DESTINATION_TICKET_COUNT);
   const deck = buildDeck();
   shuffleInPlace(rng, deck);
