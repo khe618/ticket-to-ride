@@ -1086,7 +1086,7 @@ function getStateForClient(clientId) {
   const destinationTicketMinKeep = playerIdx >= 0
     ? (game.destinationTicketMinKeepByPlayer[playerIdx] || DESTINATION_TICKET_MIN_KEEP)
     : DESTINATION_TICKET_MIN_KEEP;
-  const destinationTicketResults = (playerIdx >= 0 && game.gameOver)
+  const destinationTicketResults = playerIdx >= 0
     ? destinationTickets.map((ticket) => ({
         id: ticket.id,
         completed: getDestinationTicketResultForPlayer(playerIdx, ticket),

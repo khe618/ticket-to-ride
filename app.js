@@ -1054,7 +1054,10 @@ function renderDestinationTickets() {
     row.className = "destination-ticket-item";
     row.dataset.ticketId = ticket.id;
     const result = ticketResultById(ticket.id);
-    const completion = result ? (result.completed ? " complete" : " incomplete") : "";
+    if (result?.completed) {
+      row.classList.add("completed");
+    }
+    const completion = result?.completed ? " complete" : "";
 
     const name = document.createElement("div");
     name.className = "destination-ticket-name";
