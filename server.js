@@ -1064,6 +1064,10 @@ function maybeResetFaceUp() {
     newFaceUp.push(next);
   }
   game.faceUp = newFaceUp;
+  broadcastLog({
+    message: 'Face-up cards were cleared and refilled.',
+    sfx: 'train_whistle',
+  });
   maybeResetFaceUp();
 }
 
@@ -1394,6 +1398,11 @@ wss.on('connection', (ws) => {
       game.destinationSelectionPendingByPlayer[playerIdx] = true;
       game.destinationTicketMinKeepByPlayer[playerIdx] = DESTINATION_TICKET_DRAW_MIN_KEEP;
       game.destinationSelectionModeByPlayer[playerIdx] = 'draw';
+      broadcastLog({
+        playerName: game.players[playerIdx].name,
+        message: game.players[playerIdx].name + ' drew destination tickets.',
+        sfx: 'destination_ticket_draw',
+      });
       broadcastState();
       return;
     }
@@ -1426,6 +1435,7 @@ wss.on('connection', (ws) => {
         message: game.players[p].name + ' took ',
         cards: [color],
         faceDown: false,
+        sfx: 'ticket_select',
       });
       broadcastState();
       return;
@@ -1445,6 +1455,7 @@ wss.on('connection', (ws) => {
         message: game.players[p].name + ' took ',
         cards: ['back'],
         faceDown: true,
+        sfx: 'ticket_select',
       });
       broadcastState();
       return;
@@ -1512,6 +1523,7 @@ wss.on('connection', (ws) => {
         message: player.name + ' claimed ' + game.map.cities[edge.u].name + ' - ' + game.map.cities[edge.v].name + ' using',
         newline: true,
         cards: used,
+        sfx: 'route_build',
       });
       let triggeredFinalRoundThisTurn = false;
       if (!game.finalRoundActive && player.trains <= FINAL_TURN_THRESHOLD) {

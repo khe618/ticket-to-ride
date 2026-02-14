@@ -471,9 +471,9 @@ img {
   opacity: 0.62;
 }
 .destination-ticket-item.completed {
-  border-color: rgba(58, 110, 72, 0.65);
-  box-shadow: inset 0 0 0 2px rgba(58, 110, 72, 0.2);
-  background: rgba(213, 238, 220, 0.72);
+  border-color: rgba(173, 134, 0, 0.72);
+  box-shadow: inset 0 0 0 2px rgba(212, 168, 22, 0.28);
+  background: rgba(255, 238, 170, 0.78);
 }
 .destination-ticket-name {
   font-size: 13px;

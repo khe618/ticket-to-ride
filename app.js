@@ -818,6 +818,27 @@ let gameOver = false;
 let lobbyCanJoin = false;
 let lobbyCanStart = false;
 const CLIENT_TOKEN_KEY = "ticket_to_ride_client_token";
+const ticketSelectAudio = new Audio("sound/ticket_select.wav");
+ticketSelectAudio.preload = "auto";
+const routeBuildAudio = new Audio("sound/route_build.wav");
+routeBuildAudio.preload = "auto";
+const trainWhistleAudio = new Audio("sound/train_whistle.wav");
+trainWhistleAudio.preload = "auto";
+const destinationTicketDrawAudio = new Audio("sound/destination_ticket_draw.wav");
+destinationTicketDrawAudio.preload = "auto";
+
+function playAudioSafe(audioEl) {
+  if (!audioEl) return;
+  try {
+    audioEl.currentTime = 0;
+    const playPromise = audioEl.play();
+    if (playPromise && typeof playPromise.catch === "function") {
+      playPromise.catch(() => {});
+    }
+  } catch (err) {
+    // ignore autoplay / audio errors
+  }
+}
 
 function setGameVisibility(showGame) {
   if (gameWrapEl) gameWrapEl.classList.toggle("hidden", !showGame);
@@ -1057,11 +1078,10 @@ function renderDestinationTickets() {
     if (result?.completed) {
       row.classList.add("completed");
     }
-    const completion = result?.completed ? " complete" : "";
 
     const name = document.createElement("div");
     name.className = "destination-ticket-name";
-    name.textContent = destinationTicketLabel(ticket) + completion;
+    name.textContent = destinationTicketLabel(ticket);
 
     const points = document.createElement("div");
     points.className = "destination-ticket-points";
@@ -1451,6 +1471,7 @@ function connectSocket() {
         gameStarted = false;
         gameOver = false;
         setupPhase = false;
+        isMyTurn = false;
         destinationTickets = [];
         destinationTicketResults = [];
         destinationTicketsRemaining = 0;
@@ -1483,6 +1504,15 @@ function connectSocket() {
 
 function appendLog(entry) {
   if (!logListEl || !entry) return;
+  if (entry.sfx === "ticket_select") {
+    playAudioSafe(ticketSelectAudio);
+  } else if (entry.sfx === "route_build") {
+    playAudioSafe(routeBuildAudio);
+  } else if (entry.sfx === "train_whistle") {
+    playAudioSafe(trainWhistleAudio);
+  } else if (entry.sfx === "destination_ticket_draw") {
+    playAudioSafe(destinationTicketDrawAudio);
+  }
   const item = document.createElement("div");
   item.className = "log-item";
 
