@@ -100,7 +100,7 @@ const ROUTE_POINTS = {
   6: 15,
 };
 
-const STARTING_TRAINS = 10;
+const STARTING_TRAINS = 45;
 const FINAL_TURN_THRESHOLD = 2;
 const DESTINATION_TICKET_COUNT = 30;
 const DESTINATION_TICKET_OFFER_COUNT = 5;
@@ -746,6 +746,8 @@ function initGame(players) {
     deck,
     deckIndex: 5,
     faceUp,
+    faceUpReplacementSeq: 0,
+    faceUpReplacementIndex: -1,
     ticketsByPlayer,
     destinationTickets,
     destinationDeck,
@@ -1217,10 +1219,10 @@ function drawFromDeck() {
 }
 
 function maybeResetFaceUp() {
-  if (!game) return;
+  if (!game) return false;
   const rainbowCount = game.faceUp.filter((c) => c === 'rainbow').length;
   const remaining = game.deck.length - game.deckIndex;
-  if (rainbowCount < 3 || remaining < 5) return;
+  if (rainbowCount < 3 || remaining < 5) return false;
   for (const c of game.faceUp) game.discard.push(c);
   const newFaceUp = [];
   for (let i = 0; i < 5; i++) {
@@ -1229,11 +1231,13 @@ function maybeResetFaceUp() {
     newFaceUp.push(next);
   }
   game.faceUp = newFaceUp;
+  game.faceUpReplacementIndex = -1;
   broadcastLog({
     message: 'Face-up cards were cleared and refilled.',
     sfx: 'train_whistle',
   });
   maybeResetFaceUp();
+  return true;
 }
 
 function drawDestinationOffer(count) {
@@ -1291,6 +1295,8 @@ function getStateForClient(clientId) {
     cities: game.map.cities,
     edges: game.map.edges,
     faceUp: game.faceUp,
+    faceUpReplacementSeq: game.faceUpReplacementSeq || 0,
+    faceUpReplacementIndex: Number.isFinite(game.faceUpReplacementIndex) ? game.faceUpReplacementIndex : -1,
     tickets: playerIdx >= 0 ? (game.ticketsByPlayer[playerIdx] || {}) : {},
     ticketTotals,
     destinationTicketCounts,
@@ -1641,7 +1647,13 @@ wss.on('connection', (ws, req) => {
       } else {
         game.faceUp.splice(idx, 1);
       }
-      maybeResetFaceUp();
+      const faceUpWasReset = maybeResetFaceUp();
+      if (next && !faceUpWasReset) {
+        game.faceUpReplacementSeq = (game.faceUpReplacementSeq || 0) + 1;
+        game.faceUpReplacementIndex = idx;
+      } else {
+        game.faceUpReplacementIndex = -1;
+      }
       if (color === 'rainbow') {
         advanceTurn();
       } else {

@@ -832,6 +832,9 @@ let gameStarted = false;
 let gameOver = false;
 let lobbyCanJoin = false;
 let lobbyCanStart = false;
+let lastFaceUpCards = [];
+let activeFaceUpDealAnimation = null;
+let lastSeenFaceUpReplacementSeq = null;
 const CLIENT_TOKEN_KEY = "ticket_to_ride_client_token";
 const ticketSelectAudio = new Audio("/sound/ticket_select.wav");
 ticketSelectAudio.preload = "auto";
@@ -1121,7 +1124,129 @@ function render() {
   routeInfo.textContent = idleRouteInfoText;
 }
 
-function drawFaceUp(faceUp) {
+function clearFaceUpDealAnimation() {
+  if (!activeFaceUpDealAnimation) return;
+  const { animation, mover, target, revealTimer } = activeFaceUpDealAnimation;
+  if (Number.isFinite(revealTimer)) {
+    window.clearTimeout(revealTimer);
+  }
+  if (animation && typeof animation.cancel === "function") {
+    try {
+      animation.cancel();
+    } catch (err) {
+      // ignore animation cancellation errors
+    }
+  }
+  if (mover?.isConnected) mover.remove();
+  if (target instanceof HTMLElement) {
+    target.classList.remove("incoming-from-deck");
+    target.classList.remove("deal-arrived");
+  }
+  activeFaceUpDealAnimation = null;
+}
+
+function revealIncomingFaceUpCard(target, mover) {
+  if (mover?.isConnected) mover.remove();
+  if (!(target instanceof HTMLElement)) return;
+  target.classList.remove("incoming-from-deck");
+  target.classList.add("deal-arrived");
+  const revealTimer = window.setTimeout(() => {
+    target.classList.remove("deal-arrived");
+    if (activeFaceUpDealAnimation?.target === target) {
+      activeFaceUpDealAnimation = null;
+    }
+  }, 320);
+  if (activeFaceUpDealAnimation?.target === target) {
+    activeFaceUpDealAnimation.revealTimer = revealTimer;
+  }
+}
+
+function animateDeckToFaceUpSlot(index) {
+  if (!Number.isFinite(index) || index < 0) return;
+  if (!deckBackEl || !faceUpEl) return;
+  if (typeof window.matchMedia === "function" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    return;
+  }
+  const target = faceUpEl.querySelector(`img[data-index="${index}"]`);
+  if (!(target instanceof HTMLImageElement)) return;
+
+  const deckRect = deckBackEl.getBoundingClientRect();
+  const targetRect = target.getBoundingClientRect();
+  if (deckRect.width <= 0 || deckRect.height <= 0 || targetRect.width <= 0 || targetRect.height <= 0) {
+    return;
+  }
+
+  target.classList.add("incoming-from-deck");
+  const mover = document.createElement("img");
+  mover.className = "card deck-deal-fly";
+  mover.src = "/img/back.png";
+  mover.alt = "";
+  mover.setAttribute("aria-hidden", "true");
+  mover.style.position = "fixed";
+  mover.style.left = `${deckRect.left}px`;
+  mover.style.top = `${deckRect.top}px`;
+  mover.style.width = `${deckRect.width}px`;
+  mover.style.height = `${deckRect.height}px`;
+  mover.style.pointerEvents = "none";
+  mover.style.zIndex = "1200";
+  mover.style.margin = "0";
+  document.body.appendChild(mover);
+
+  const dx = targetRect.left - deckRect.left;
+  const dy = targetRect.top - deckRect.top;
+  const sx = targetRect.width / deckRect.width;
+  const sy = targetRect.height / deckRect.height;
+
+  if (typeof mover.animate !== "function") {
+    revealIncomingFaceUpCard(target, mover);
+    return;
+  }
+
+  const animation = mover.animate(
+    [
+      { transform: "translate(0px, 0px) scale(1, 1)", opacity: 1 },
+      { transform: `translate(${dx}px, ${dy}px) scale(${sx}, ${sy})`, opacity: 1 },
+    ],
+    {
+      duration: 520,
+      easing: "cubic-bezier(0.2, 0.7, 0.25, 1)",
+      fill: "forwards",
+    }
+  );
+  activeFaceUpDealAnimation = {
+    animation,
+    mover,
+    target,
+    revealTimer: null,
+  };
+  animation.onfinish = () => {
+    if (activeFaceUpDealAnimation?.animation !== animation) return;
+    revealIncomingFaceUpCard(target, mover);
+  };
+  animation.oncancel = () => {
+    if (mover?.isConnected) mover.remove();
+    target.classList.remove("incoming-from-deck");
+    if (activeFaceUpDealAnimation?.animation === animation) {
+      activeFaceUpDealAnimation = null;
+    }
+  };
+}
+
+function findFaceUpReplacementIndex(prevFaceUp, nextFaceUp) {
+  if (!Array.isArray(prevFaceUp) || !Array.isArray(nextFaceUp)) return -1;
+  if (prevFaceUp.length <= 0 || prevFaceUp.length !== nextFaceUp.length) return -1;
+  let changed = -1;
+  for (let i = 0; i < nextFaceUp.length; i++) {
+    if (prevFaceUp[i] === nextFaceUp[i]) continue;
+    if (changed >= 0) return -1;
+    changed = i;
+  }
+  return changed;
+}
+
+function drawFaceUp(faceUp, animatedReplacementIndex = -1) {
+  clearFaceUpDealAnimation();
   faceUpEl.innerHTML = "";
   for (let i = 0; i < faceUp.length; i++) {
     const name = faceUp[i];
@@ -1140,6 +1265,10 @@ function drawFaceUp(faceUp) {
     }
 
     faceUpEl.appendChild(img);
+  }
+
+  if (animatedReplacementIndex >= 0) {
+    animateDeckToFaceUpSlot(animatedReplacementIndex);
   }
 }
 
@@ -1457,6 +1586,27 @@ function renderGameOver(state) {
 
 function applyState(state) {
   if (!state) return;
+  const nextFaceUp = Array.isArray(state.faceUp) ? state.faceUp.slice() : [];
+  const hasServerFaceUpReplacementSignal = Number.isFinite(state.faceUpReplacementSeq);
+  const nextFaceUpReplacementSeq = hasServerFaceUpReplacementSignal
+    ? state.faceUpReplacementSeq
+    : 0;
+  const serverReplacementIndex = Number.isFinite(state.faceUpReplacementIndex)
+    ? state.faceUpReplacementIndex
+    : -1;
+  let replacementIndex = -1;
+  if (hasServerFaceUpReplacementSignal) {
+    if (
+      lastSeenFaceUpReplacementSeq !== null &&
+      nextFaceUpReplacementSeq > lastSeenFaceUpReplacementSeq &&
+      serverReplacementIndex >= 0 &&
+      serverReplacementIndex < nextFaceUp.length
+    ) {
+      replacementIndex = serverReplacementIndex;
+    }
+  } else {
+    replacementIndex = findFaceUpReplacementIndex(lastFaceUpCards, nextFaceUp);
+  }
 
   gameStarted = true;
   setGameVisibility(true);
@@ -1494,7 +1644,9 @@ function applyState(state) {
   myTrainsRemaining = myIdx >= 0 ? (players[myIdx]?.trains ?? 0) : 0;
 
   render();
-  drawFaceUp(state.faceUp || []);
+  drawFaceUp(nextFaceUp, replacementIndex);
+  lastFaceUpCards = nextFaceUp;
+  lastSeenFaceUpReplacementSeq = hasServerFaceUpReplacementSignal ? nextFaceUpReplacementSeq : null;
   renderTicketPile();
   renderDestinationTickets();
 
@@ -1618,6 +1770,9 @@ function connectSocket() {
         closeColorModal();
         closeTicketSelectModal();
         setInitialTicketSelectionFocus(false);
+        lastFaceUpCards = [];
+        lastSeenFaceUpReplacementSeq = null;
+        clearFaceUpDealAnimation();
         renderDestinationTickets();
         refreshDestinationControls();
         applyChatInputAccess();
