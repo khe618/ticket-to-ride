@@ -28,6 +28,18 @@
       <div class="title">Ticket to Random</div>
       <div id="routeInfo" class="route-info">Select a route</div>
       <button id="submitBtn" class="submit" disabled>Submit Route</button>
+      <div class="sidebar-destination" aria-label="Your destination tickets">
+        <div class="ticket-block-title">Your Destination Tickets</div>
+        <div id="destinationTicketsList" class="destination-tickets-list"></div>
+        <button id="drawDestinationBtn" class="submit" type="button" disabled>Draw destination tickets</button>
+        <div id="ticketSelectPanel" class="ticket-select-panel hidden" aria-label="Destination ticket selection">
+          <div id="ticketSelectHint" class="destination-ticket-empty">Keep at least 2 tickets.</div>
+          <div id="ticketSelectList" class="destination-tickets-list selection"></div>
+          <div class="ticket-select-actions">
+            <button id="ticketSelectSubmit" class="modal-btn primary" disabled>Confirm Ticket Selection</button>
+          </div>
+        </div>
+      </div>
       <div class="log-area" aria-label="Game log">
         <div class="log-title">Game Log</div>
         <div id="logList" class="log-list"></div>
@@ -63,10 +75,6 @@
           <div class="ticket-block-title">Train Cards</div>
           <div id="ticketPile" class="ticket-pile"></div>
         </div>
-        <div class="ticket-block">
-          <div class="ticket-block-title">Destination Tickets</div>
-          <div id="destinationTicketsList" class="destination-tickets-list"></div>
-        </div>
       </div>
     </div>
   </div>
@@ -89,17 +97,6 @@
       <div id="standingsList" class="standings-list"></div>
       <div class="modal-actions">
         <button id="returnLobbyBtn" class="modal-btn primary">Return to Lobby</button>
-      </div>
-    </div>
-  </div>
-
-  <div id="ticketSelectModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="ticketSelectTitle">
-    <div class="modal-card ticket-select-card">
-      <div id="ticketSelectTitle" class="modal-title">Choose Destination Tickets</div>
-      <div id="ticketSelectHint" class="gameover-summary">Keep at least 2 tickets.</div>
-      <div id="ticketSelectList" class="destination-tickets-list selection"></div>
-      <div class="modal-actions">
-        <button id="ticketSelectSubmit" class="modal-btn primary" disabled>Confirm Selection</button>
       </div>
     </div>
   </div>

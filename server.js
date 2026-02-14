@@ -71,7 +71,7 @@ const ROUTE_POINTS = {
   3: 4,
   4: 7,
   5: 10,
-  6: 16,
+  6: 15,
 };
 
 const STARTING_TRAINS = 10;
@@ -79,6 +79,8 @@ const FINAL_TURN_THRESHOLD = 2;
 const DESTINATION_TICKET_COUNT = 30;
 const DESTINATION_TICKET_OFFER_COUNT = 5;
 const DESTINATION_TICKET_MIN_KEEP = 2;
+const DESTINATION_TICKET_DRAW_COUNT = 3;
+const DESTINATION_TICKET_DRAW_MIN_KEEP = 1;
 
 const PLAYER_POOL = [
   { color: "red", hex: "#cc0000" },
@@ -707,6 +709,8 @@ function initGame(players) {
     destinationOffersByPlayer,
     destinationTicketsByPlayer: players.map(() => []),
     destinationSelectionPendingByPlayer: players.map(() => true),
+    destinationTicketMinKeepByPlayer: players.map(() => DESTINATION_TICKET_MIN_KEEP),
+    destinationSelectionModeByPlayer: players.map(() => 'setup'),
     setupPhase: true,
     discard: [],
     players: players.map((p) => ({ ...p, connected: true, trains: STARTING_TRAINS })),
@@ -897,10 +901,9 @@ function getDestinationTicketResultForPlayer(playerIdx, ticket, cachedAdj) {
   return hasPathBetweenCities(adj, ticket.u, ticket.v);
 }
 
-function computeScores(options = {}) {
-  const includeDestinationTickets = !!options.includeDestinationTickets;
+function computeRouteScores() {
   if (!game) return [];
-  const routeScores = game.players.map((p) => {
+  return game.players.map((p) => {
     let total = 0;
     for (const e of game.map.edges) {
       if (e.claimedBy === p.color) {
@@ -909,22 +912,43 @@ function computeScores(options = {}) {
     }
     return total;
   });
-  if (!includeDestinationTickets) return routeScores;
-
-  return routeScores.map((routeScore, idx) => {
-    const tickets = game.destinationTicketsByPlayer[idx] || [];
-    if (tickets.length === 0) return routeScore;
-    const adj = buildClaimedAdjacencyForPlayer(game.players[idx].color);
-    let delta = 0;
-    for (const ticket of tickets) {
-      const completed = getDestinationTicketResultForPlayer(idx, ticket, adj);
-      delta += completed ? ticket.points : -ticket.points;
-    }
-    return routeScore + delta;
-  });
 }
 
-function buildStandings(scores) {
+function buildDestinationTicketBreakdownForPlayer(playerIdx) {
+  if (!game) return { pointsDelta: 0, tickets: [] };
+  const tickets = game.destinationTicketsByPlayer[playerIdx] || [];
+  if (tickets.length === 0) {
+    return { pointsDelta: 0, tickets: [] };
+  }
+  const adj = buildClaimedAdjacencyForPlayer(game.players[playerIdx].color);
+  let delta = 0;
+  const detail = tickets.map((ticket) => {
+    const completed = getDestinationTicketResultForPlayer(playerIdx, ticket, adj);
+    delta += completed ? ticket.points : -ticket.points;
+    return {
+      id: ticket.id,
+      u: ticket.u,
+      v: ticket.v,
+      points: ticket.points,
+      completed,
+    };
+  });
+  return { pointsDelta: delta, tickets: detail };
+}
+
+function computeScores(options = {}) {
+  const includeDestinationTickets = !!options.includeDestinationTickets;
+  if (!game) return [];
+  const routeScores = computeRouteScores();
+  if (!includeDestinationTickets) return routeScores;
+
+  const destinationBreakdowns = game.players.map((_, idx) =>
+    buildDestinationTicketBreakdownForPlayer(idx)
+  );
+  return routeScores.map((routeScore, idx) => routeScore + destinationBreakdowns[idx].pointsDelta);
+}
+
+function buildStandings(scores, routeScores, destinationBreakdowns) {
   if (!game) return [];
   return game.players
     .map((p, idx) => ({
@@ -933,6 +957,9 @@ function buildStandings(scores) {
       color: p.color,
       hex: p.hex,
       score: scores[idx] || 0,
+      routePoints: routeScores ? (routeScores[idx] || 0) : 0,
+      destinationPoints: destinationBreakdowns ? (destinationBreakdowns[idx]?.pointsDelta || 0) : 0,
+      destinationTickets: destinationBreakdowns ? (destinationBreakdowns[idx]?.tickets || []) : [],
     }))
     .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
 }
@@ -941,8 +968,12 @@ function endGame() {
   if (!game || game.gameOver) return;
   game.gameOver = true;
   game.turnDrawCount = 0;
-  const scores = computeScores({ includeDestinationTickets: true });
-  game.standings = buildStandings(scores);
+  const routeScores = computeRouteScores();
+  const destinationBreakdowns = game.players.map((_, idx) =>
+    buildDestinationTicketBreakdownForPlayer(idx)
+  );
+  const scores = routeScores.map((routeScore, idx) => routeScore + destinationBreakdowns[idx].pointsDelta);
+  game.standings = buildStandings(scores, routeScores, destinationBreakdowns);
 }
 
 function triggerFinalRound(triggerIdx) {
@@ -1013,6 +1044,13 @@ function maybeResetFaceUp() {
   maybeResetFaceUp();
 }
 
+function drawDestinationOffer(count) {
+  if (!game) return [];
+  const drawCount = Math.max(0, Math.min(count, game.destinationDeck.length));
+  if (drawCount <= 0) return [];
+  return game.destinationDeck.splice(0, drawCount);
+}
+
 function spendTickets(playerIdx, color, len) {
   if (!game) return false;
   const pile = game.ticketsByPlayer[playerIdx];
@@ -1034,6 +1072,7 @@ function getStateForClient(clientId) {
   const ticketTotals = game.ticketsByPlayer.map((counts) =>
     Object.values(counts).reduce((a, b) => a + b, 0)
   );
+  const destinationTicketCounts = game.destinationTicketsByPlayer.map((tickets) => tickets.length);
   const scores = game.gameOver
     ? computeScores({ includeDestinationTickets: true })
     : computeScores({ includeDestinationTickets: false });
@@ -1044,6 +1083,9 @@ function getStateForClient(clientId) {
   const destinationSelectionPending = playerIdx >= 0
     ? !!game.destinationSelectionPendingByPlayer[playerIdx]
     : false;
+  const destinationTicketMinKeep = playerIdx >= 0
+    ? (game.destinationTicketMinKeepByPlayer[playerIdx] || DESTINATION_TICKET_MIN_KEEP)
+    : DESTINATION_TICKET_MIN_KEEP;
   const destinationTicketResults = (playerIdx >= 0 && game.gameOver)
     ? destinationTickets.map((ticket) => ({
         id: ticket.id,
@@ -1056,6 +1098,7 @@ function getStateForClient(clientId) {
     faceUp: game.faceUp,
     tickets: playerIdx >= 0 ? (game.ticketsByPlayer[playerIdx] || {}) : {},
     ticketTotals,
+    destinationTicketCounts,
     discardCount: game.discard.length,
     deckRemaining,
     scores,
@@ -1070,7 +1113,8 @@ function getStateForClient(clientId) {
     destinationTickets,
     destinationOffer: destinationSelectionPending ? destinationOffer : [],
     destinationSelectionPending,
-    destinationTicketMinKeep: DESTINATION_TICKET_MIN_KEEP,
+    destinationTicketMinKeep,
+    destinationTicketsRemaining: game.destinationDeck.length,
     destinationTicketResults,
     you: {
       isPlayer: playerIdx >= 0,
@@ -1235,6 +1279,8 @@ wss.on('connection', (ws) => {
     if (playerIdx < 0) return;
     if (msg.type === 'select_tickets') {
       const offer = game.destinationOffersByPlayer[playerIdx] || [];
+      const selectionMode = game.destinationSelectionModeByPlayer[playerIdx] || 'setup';
+      const minKeep = game.destinationTicketMinKeepByPlayer[playerIdx] || DESTINATION_TICKET_MIN_KEEP;
       if (!game.destinationSelectionPendingByPlayer[playerIdx]) {
         sendError(ws, 'You already selected destination tickets.');
         return;
@@ -1245,8 +1291,8 @@ wss.on('connection', (ws) => {
       }
       const keepIdsRaw = Array.isArray(msg.keepTicketIds) ? msg.keepTicketIds : [];
       const keepIds = [...new Set(keepIdsRaw.map((v) => String(v || '')))].filter((v) => v);
-      if (keepIds.length < DESTINATION_TICKET_MIN_KEEP || keepIds.length > offer.length) {
-        sendError(ws, `Keep between ${DESTINATION_TICKET_MIN_KEEP} and ${offer.length} tickets.`);
+      if (keepIds.length < minKeep || keepIds.length > offer.length) {
+        sendError(ws, `Keep between ${minKeep} and ${offer.length} tickets.`);
         return;
       }
       const offerById = new Map(offer.map((ticket) => [ticket.id, ticket]));
@@ -1259,16 +1305,36 @@ wss.on('connection', (ws) => {
         }
         kept.push(ticket);
       }
-      game.destinationTicketsByPlayer[playerIdx] = kept;
+      const returned = offer.filter((ticket) => !keepIds.includes(ticket.id));
+      if (returned.length > 0) {
+        game.destinationDeck.push(...returned);
+      }
+      if (selectionMode === 'draw') {
+        game.destinationTicketsByPlayer[playerIdx] = [
+          ...(game.destinationTicketsByPlayer[playerIdx] || []),
+          ...kept,
+        ];
+      } else {
+        game.destinationTicketsByPlayer[playerIdx] = kept;
+      }
       game.destinationOffersByPlayer[playerIdx] = [];
       game.destinationSelectionPendingByPlayer[playerIdx] = false;
+      game.destinationTicketMinKeepByPlayer[playerIdx] = 0;
+      game.destinationSelectionModeByPlayer[playerIdx] = '';
 
       broadcastLog({
         playerName: game.players[playerIdx].name,
-        message: game.players[playerIdx].name + ' chose destination tickets.',
+        message: game.players[playerIdx].name + ' chose ' + kept.length + ' destination tickets.',
       });
 
-      if (game.destinationSelectionPendingByPlayer.every((pending) => !pending)) {
+      if (selectionMode === 'draw') {
+        advanceTurn();
+        if (game.gameOver) {
+          broadcastLog({
+            message: 'Game over. Final standings are now available.',
+          });
+        }
+      } else if (game.destinationSelectionPendingByPlayer.every((pending) => !pending)) {
         game.setupPhase = false;
         broadcastLog({
           message: 'All players chose destination tickets. The game has begun.',
@@ -1287,6 +1353,24 @@ wss.on('connection', (ws) => {
       return;
     }
     if (playerIdx !== game.currentTurn) return;
+
+    if (msg.type === 'draw_destination_tickets') {
+      if (game.destinationSelectionPendingByPlayer[playerIdx]) {
+        sendError(ws, 'Choose your destination tickets first.');
+        return;
+      }
+      const offer = drawDestinationOffer(DESTINATION_TICKET_DRAW_COUNT);
+      if (offer.length <= 0) {
+        sendError(ws, 'No destination tickets remain.');
+        return;
+      }
+      game.destinationOffersByPlayer[playerIdx] = offer;
+      game.destinationSelectionPendingByPlayer[playerIdx] = true;
+      game.destinationTicketMinKeepByPlayer[playerIdx] = DESTINATION_TICKET_DRAW_MIN_KEEP;
+      game.destinationSelectionModeByPlayer[playerIdx] = 'draw';
+      broadcastState();
+      return;
+    }
 
     if (msg.type === 'draw_faceup') {
       const idx = Number(msg.index);
