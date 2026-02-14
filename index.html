@@ -64,6 +64,19 @@
             <div class="players-title">Players</div>
             <div id="playersList" class="players-list"></div>
           </div>
+          <div id="chatPanel" class="game-chat" aria-label="Game chat">
+            <div class="chat-header">
+              <div class="chat-title">Chat</div>
+              <button id="chatToggleBtn" class="chat-toggle" type="button" aria-expanded="true" aria-label="Hide chat">-</button>
+            </div>
+            <div id="chatBody" class="chat-body">
+              <div id="chatMessages" class="chat-messages"></div>
+              <form id="chatForm" class="chat-form" autocomplete="off">
+                <input id="chatInput" class="chat-input" type="text" maxlength="220" placeholder="Type a message" />
+                <button id="chatSendBtn" class="chat-send" type="submit">Send</button>
+              </form>
+            </div>
+          </div>
         </div>
         <div id="gameBox" class="game-box">
           <svg id="mapSvg" viewBox="0 0 1000 1000" aria-label="Route map"></svg>

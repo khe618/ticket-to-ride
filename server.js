@@ -82,6 +82,8 @@ const DESTINATION_TICKET_MIN_KEEP = 2;
 const DESTINATION_TICKET_DRAW_COUNT = 3;
 const DESTINATION_TICKET_DRAW_MIN_KEEP = 1;
 const GLOBETROTTER_BONUS_POINTS = 10;
+const CHAT_MAX_MESSAGE_LENGTH = 220;
+const CHAT_HISTORY_LIMIT = 120;
 
 const PLAYER_POOL = [
   { color: "red", hex: "#cc0000" },
@@ -683,6 +685,13 @@ function sanitizeToken(value) {
   return token;
 }
 
+function sanitizeChatText(value) {
+  return String(value || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, CHAT_MAX_MESSAGE_LENGTH);
+}
+
 function pickRandom(arr) {
   if (!Array.isArray(arr) || arr.length === 0) return null;
   return arr[Math.floor(rng() * arr.length)] || null;
@@ -722,6 +731,7 @@ function initGame(players) {
     finalRoundTriggeredBy: null,
     gameOver: false,
     standings: [],
+    chatMessages: [],
   };
 }
 
@@ -1146,6 +1156,7 @@ function getStateForClient(clientId) {
     destinationTicketMinKeep,
     destinationTicketsRemaining: game.destinationDeck.length,
     destinationTicketResults,
+    chatMessages: game.chatMessages || [],
     you: {
       isPlayer: playerIdx >= 0,
       isTurn: !game.gameOver && !game.setupPhase && playerIdx >= 0 && playerIdx === game.currentTurn,
@@ -1170,6 +1181,22 @@ function broadcastState() {
   wss.clients.forEach((client) => {
     if (client.readyState !== 1) return;
     sendState(client);
+  });
+}
+
+function broadcastChat(payload) {
+  const msg = JSON.stringify({
+    type: 'chat',
+    payload: {
+      ...payload,
+      ts: payload?.ts || Date.now(),
+    },
+  });
+  wss.clients.forEach((client) => {
+    if (client.readyState !== 1) return;
+    const clientId = socketClientIds.get(client);
+    if (!clientId || !shouldShowGameForClient(clientId)) return;
+    client.send(msg);
   });
 }
 
@@ -1307,6 +1334,27 @@ wss.on('connection', (ws) => {
 
     const playerIdx = getPlayerIndexForSocket(ws);
     if (playerIdx < 0) return;
+    if (msg.type === 'chat_send') {
+      const text = sanitizeChatText(msg.text);
+      if (!text) return;
+      const player = game.players[playerIdx];
+      if (!player) return;
+      const chatMessage = {
+        id: chance.guid(),
+        playerId: player.id,
+        playerName: player.name,
+        playerColor: player.color,
+        playerHex: player.hex,
+        text,
+        ts: Date.now(),
+      };
+      game.chatMessages.push(chatMessage);
+      if (game.chatMessages.length > CHAT_HISTORY_LIMIT) {
+        game.chatMessages = game.chatMessages.slice(game.chatMessages.length - CHAT_HISTORY_LIMIT);
+      }
+      broadcastChat(chatMessage);
+      return;
+    }
     if (msg.type === 'select_tickets') {
       const offer = game.destinationOffersByPlayer[playerIdx] || [];
       const selectionMode = game.destinationSelectionModeByPlayer[playerIdx] || 'setup';

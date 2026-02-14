@@ -789,6 +789,13 @@ const standingsListEl = document.getElementById("standingsList");
 const returnLobbyBtnEl = document.getElementById("returnLobbyBtn");
 const howToPlayModalEl = document.getElementById("howToPlayModal");
 const howToPlayCloseBtnEl = document.getElementById("howToPlayCloseBtn");
+const chatPanelEl = document.getElementById("chatPanel");
+const chatToggleBtnEl = document.getElementById("chatToggleBtn");
+const chatBodyEl = document.getElementById("chatBody");
+const chatMessagesEl = document.getElementById("chatMessages");
+const chatFormEl = document.getElementById("chatForm");
+const chatInputEl = document.getElementById("chatInput");
+const chatSendBtnEl = document.getElementById("chatSendBtn");
 const destinationTicketsListEl = document.getElementById("destinationTicketsList");
 const drawDestinationBtnEl = document.getElementById("drawDestinationBtn");
 const ticketSelectPanelEl = document.getElementById("ticketSelectPanel");
@@ -811,6 +818,7 @@ let destinationTicketMinKeep = 2;
 let destinationSelectionPending = false;
 let destinationTicketsRemaining = 0;
 let setupPhase = false;
+let chatMessages = [];
 let ws = null;
 let turnDrawCount = 0;
 let isMyTurn = false;
@@ -847,6 +855,69 @@ function setGameVisibility(showGame) {
   if (gameWrapEl) gameWrapEl.classList.toggle("hidden", !showGame);
   if (lobbyScreenEl) lobbyScreenEl.classList.toggle("hidden", showGame);
   if (showGame) hideHowToPlayModal();
+}
+
+function setChatCollapsed(collapsed) {
+  if (!chatPanelEl || !chatToggleBtnEl) return;
+  chatPanelEl.classList.toggle("collapsed", !!collapsed);
+  chatToggleBtnEl.setAttribute("aria-expanded", collapsed ? "false" : "true");
+  chatToggleBtnEl.textContent = collapsed ? "□" : "-";
+  chatToggleBtnEl.setAttribute("aria-label", collapsed ? "Show chat" : "Hide chat");
+}
+
+function applyChatInputAccess() {
+  const canSend = !!(gameStarted && amPlayer);
+  if (chatInputEl) {
+    chatInputEl.disabled = !canSend;
+    chatInputEl.placeholder = canSend ? "Type a message" : "Chat is read-only for spectators";
+  }
+  if (chatSendBtnEl) chatSendBtnEl.disabled = !canSend;
+}
+
+function renderChatMessages() {
+  if (!chatMessagesEl) return;
+  chatMessagesEl.innerHTML = "";
+  if (!Array.isArray(chatMessages) || chatMessages.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "chat-empty";
+    empty.textContent = "No messages yet.";
+    chatMessagesEl.appendChild(empty);
+    return;
+  }
+  chatMessages.forEach((entry) => {
+    const row = document.createElement("div");
+    row.className = "chat-message";
+
+    const sender = document.createElement("span");
+    sender.className = "chat-sender";
+    sender.textContent = `${entry.playerName || "Player"}: `;
+    if (entry.playerHex) sender.style.color = entry.playerHex;
+    row.appendChild(sender);
+
+    const text = document.createElement("span");
+    text.textContent = entry.text || "";
+    row.appendChild(text);
+    chatMessagesEl.appendChild(row);
+  });
+  chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight;
+}
+
+function setChatMessages(nextMessages) {
+  chatMessages = Array.isArray(nextMessages)
+    ? nextMessages.filter((m) => m && typeof m.text === "string")
+    : [];
+  renderChatMessages();
+}
+
+function appendChatMessage(entry) {
+  if (!entry || typeof entry.text !== "string") return;
+  const id = String(entry.id || "");
+  if (id && chatMessages.some((m) => m.id === id)) return;
+  chatMessages.push(entry);
+  if (chatMessages.length > 120) {
+    chatMessages = chatMessages.slice(chatMessages.length - 120);
+  }
+  renderChatMessages();
 }
 
 function hideGameOverModal() {
@@ -1361,6 +1432,7 @@ function applyState(state) {
   currentMap = { cities: state.cities || [], edges: state.edges || [] };
   destinationTickets = Array.isArray(state.destinationTickets) ? state.destinationTickets.slice() : [];
   destinationTicketResults = Array.isArray(state.destinationTicketResults) ? state.destinationTicketResults.slice() : [];
+  setChatMessages(Array.isArray(state.chatMessages) ? state.chatMessages : []);
   destinationSelectionPending = !!state.destinationSelectionPending;
   destinationTicketsRemaining = Number.isFinite(state.destinationTicketsRemaining)
     ? state.destinationTicketsRemaining
@@ -1422,6 +1494,7 @@ function applyState(state) {
   }
   setInitialTicketSelectionFocus(!!(setupPhase && destinationSelectionPending && amPlayer && destinationOffer.length > 0));
   refreshDestinationControls();
+  applyChatInputAccess();
 
   if (gameOver) {
     renderGameOver(state);
@@ -1493,6 +1566,7 @@ function connectSocket() {
         destinationTickets = [];
         destinationTicketResults = [];
         destinationTicketsRemaining = 0;
+        setChatMessages([]);
         clearCityHighlights();
         hideGameOverModal();
         closeColorModal();
@@ -1500,6 +1574,7 @@ function connectSocket() {
         setInitialTicketSelectionFocus(false);
         renderDestinationTickets();
         refreshDestinationControls();
+        applyChatInputAccess();
         setGameVisibility(false);
       }
       return;
@@ -1512,6 +1587,11 @@ function connectSocket() {
 
     if (msg.type === "log") {
       appendLog(msg.payload);
+      return;
+    }
+
+    if (msg.type === "chat") {
+      appendChatMessage(msg.payload);
       return;
     }
 
@@ -1596,6 +1676,21 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && howToPlayModalEl && !howToPlayModalEl.classList.contains("hidden")) {
     hideHowToPlayModal();
   }
+});
+
+chatToggleBtnEl?.addEventListener("click", () => {
+  const collapsed = chatPanelEl?.classList.contains("collapsed");
+  setChatCollapsed(!collapsed);
+});
+
+chatFormEl?.addEventListener("submit", (e) => {
+  e.preventDefault();
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  if (!gameStarted || !amPlayer) return;
+  const text = String(chatInputEl?.value || "").trim();
+  if (!text) return;
+  ws.send(JSON.stringify({ type: "chat_send", text }));
+  if (chatInputEl) chatInputEl.value = "";
 });
 
 returnLobbyBtnEl?.addEventListener("click", () => {
@@ -1758,6 +1853,9 @@ colorSubmitEl.addEventListener("click", () => {
 setGameVisibility(false);
 refreshLobbyControls();
 renderDestinationTickets();
+setChatCollapsed(false);
+applyChatInputAccess();
+renderChatMessages();
 refreshDestinationControls();
 connectSocket();
 

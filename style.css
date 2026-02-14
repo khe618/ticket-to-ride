@@ -205,6 +205,111 @@ img {
   overflow: hidden;
 }
 #mapSvg { position: relative; z-index: 1; }
+.game-chat {
+  width: 100%;
+  border: 1px solid rgba(120, 90, 60, 0.35);
+  border-radius: 12px;
+  background: rgba(255, 248, 235, 0.95);
+  box-shadow: 0 8px 18px rgba(60, 40, 20, 0.18);
+  overflow: hidden;
+}
+.game-chat.collapsed .chat-body {
+  display: none;
+}
+.chat-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid rgba(120, 90, 60, 0.25);
+  background: rgba(228, 204, 169, 0.95);
+}
+.chat-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #3a2a1a;
+  letter-spacing: 0.2px;
+}
+.chat-toggle {
+  width: 22px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid rgba(120, 90, 60, 0.45);
+  border-radius: 5px;
+  background: #fff3de;
+  color: #3a2a1a;
+  font-weight: 800;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+}
+.chat-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+}
+.chat-messages {
+  max-height: 160px;
+  min-height: 80px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-right: 2px;
+}
+.chat-empty {
+  font-size: 12px;
+  color: #6b523b;
+  opacity: 0.9;
+}
+.chat-message {
+  font-size: 12px;
+  line-height: 1.35;
+  color: #3a2a1a;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(120, 90, 60, 0.2);
+  border-radius: 8px;
+  padding: 5px 7px;
+  word-break: break-word;
+}
+.chat-sender {
+  font-weight: 800;
+}
+.chat-form {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 6px;
+}
+.chat-input {
+  border: 1px solid rgba(120, 90, 60, 0.35);
+  border-radius: 8px;
+  background: #fff9f0;
+  color: #3a2a1a;
+  padding: 8px 9px;
+  font-size: 13px;
+}
+.chat-input:focus {
+  outline: 2px solid rgba(70, 100, 60, 0.35);
+  outline-offset: 1px;
+}
+.chat-send {
+  border: 1px solid rgba(70, 90, 60, 0.45);
+  border-radius: 8px;
+  background: #cfe8c4;
+  color: #24331f;
+  font-weight: 700;
+  padding: 8px 10px;
+  cursor: pointer;
+}
+.chat-send:disabled,
+.chat-input:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
 .legend {
   position: relative;
   background: rgba(255, 248, 235, 0.9);
