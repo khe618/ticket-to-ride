@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Ticket to Random Rooms</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body class="home-body">
+  <div class="home-shell">
+    <div class="home-title">Ticket to Random</div>
+    <div class="home-subtitle">Enter a private room name to start or rejoin a game.</div>
+    <form id="roomSearchForm" class="home-form" autocomplete="off">
+      <input id="roomSearchInput" class="home-input" type="text" maxlength="40" placeholder="Room name (letters, numbers, - or _)" />
+      <button class="home-btn" type="submit">Enter Room</button>
+    </form>
+    <div id="roomSearchError" class="home-error"></div>
+
+    <div class="home-list-wrap">
+      <div class="home-list-title">Active Rooms</div>
+      <div id="homeRoomList" class="home-room-list"></div>
+    </div>
+  </div>
+
+  <script>
+    const ROOM_REGEX = /^[A-Za-z0-9_-]{1,40}$/;
+    const formEl = document.getElementById("roomSearchForm");
+    const inputEl = document.getElementById("roomSearchInput");
+    const errorEl = document.getElementById("roomSearchError");
+    const roomListEl = document.getElementById("homeRoomList");
+
+    function normalizeRoomName(raw) {
+      const value = String(raw || "").trim().toLowerCase();
+      if (!ROOM_REGEX.test(value)) return "";
+      return value;
+    }
+
+    function goToRoom(roomName) {
+      const normalized = normalizeRoomName(roomName);
+      if (!normalized) {
+        errorEl.textContent = "Use 1-40 letters, numbers, hyphen, or underscore.";
+        return;
+      }
+      window.location.href = `/${encodeURIComponent(normalized)}`;
+    }
+
+    function renderRooms(rooms) {
+      roomListEl.innerHTML = "";
+      if (!Array.isArray(rooms) || rooms.length === 0) {
+        const empty = document.createElement("div");
+        empty.className = "home-room-empty";
+        empty.textContent = "No active rooms right now.";
+        roomListEl.appendChild(empty);
+        return;
+      }
+      rooms.forEach((room) => {
+        const row = document.createElement("button");
+        row.className = "home-room-row";
+        row.type = "button";
+        row.textContent = `${room.name} · ${room.players} in lobby${room.inGame ? " · game active" : ""}`;
+        row.addEventListener("click", () => goToRoom(room.name));
+        roomListEl.appendChild(row);
+      });
+    }
+
+    async function refreshRooms() {
+      try {
+        const res = await fetch("/api/rooms", { cache: "no-store" });
+        if (!res.ok) return;
+        const payload = await res.json();
+        renderRooms(payload.rooms || []);
+      } catch (err) {
+        // ignore transient network issues
+      }
+    }
+
+    formEl.addEventListener("submit", (e) => {
+      e.preventDefault();
+      errorEl.textContent = "";
+      goToRoom(inputEl.value);
+    });
+
+    refreshRooms();
+    setInterval(refreshRooms, 5000);
+  </script>
+</body>
+</html>

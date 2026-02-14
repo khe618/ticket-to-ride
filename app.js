@@ -829,14 +829,21 @@ let gameOver = false;
 let lobbyCanJoin = false;
 let lobbyCanStart = false;
 const CLIENT_TOKEN_KEY = "ticket_to_ride_client_token";
-const ticketSelectAudio = new Audio("sound/ticket_select.wav");
+const ticketSelectAudio = new Audio("/sound/ticket_select.wav");
 ticketSelectAudio.preload = "auto";
-const routeBuildAudio = new Audio("sound/route_build.wav");
+const routeBuildAudio = new Audio("/sound/route_build.wav");
 routeBuildAudio.preload = "auto";
-const trainWhistleAudio = new Audio("sound/train_whistle.wav");
+const trainWhistleAudio = new Audio("/sound/train_whistle.wav");
 trainWhistleAudio.preload = "auto";
-const destinationTicketDrawAudio = new Audio("sound/destination_ticket_draw.wav");
+const destinationTicketDrawAudio = new Audio("/sound/destination_ticket_draw.wav");
 destinationTicketDrawAudio.preload = "auto";
+
+function getRoomNameFromPath() {
+  const parts = window.location.pathname.split("/").filter(Boolean);
+  return parts.length > 0 ? parts[0] : "";
+}
+
+const currentRoomName = getRoomNameFromPath();
 
 function playAudioSafe(audioEl) {
   if (!audioEl) return;
@@ -1102,7 +1109,7 @@ function drawFaceUp(faceUp) {
     const img = document.createElement("img");
     img.className = "card";
     img.alt = `${name} card`;
-    img.src = `img/${name}.png`;
+    img.src = `/img/${name}.png`;
     img.dataset.color = name;
     img.dataset.index = String(i);
 
@@ -1125,7 +1132,7 @@ function renderTicketPile() {
     const item = document.createElement("div");
     item.className = "ticket-item";
     const img = document.createElement("img");
-    img.src = `img/${color}.png`;
+    img.src = `/img/${color}.png`;
     img.alt = `${color} ticket`;
     item.appendChild(img);
     const badge = document.createElement("div");
@@ -1324,7 +1331,7 @@ function renderPlayers(players, currentTurn) {
     const tickets = document.createElement("div");
     tickets.className = "player-tickets";
     const img = document.createElement("img");
-    img.src = "img/back.png";
+    img.src = "/img/back.png";
     img.alt = "Tickets";
     const total = p.ticketTotal ?? 0;
     const count = document.createElement("span");
@@ -1515,8 +1522,12 @@ function handleServerError(payload) {
 }
 
 function connectSocket() {
+  if (!currentRoomName) {
+    setLobbyStatus("Invalid room.");
+    return;
+  }
   const protocol = window.location.protocol === "https:" ? "wss" : "ws";
-  ws = new WebSocket(`${protocol}://${window.location.host}`);
+  ws = new WebSocket(`${protocol}://${window.location.host}?room=${encodeURIComponent(currentRoomName)}`);
 
   ws.addEventListener("open", () => {
     let storedToken = "";
@@ -1625,7 +1636,7 @@ function appendLog(entry) {
 
     entry.cards.forEach((c) => {
       const img = document.createElement("img");
-      img.src = `img/${c}.png`;
+      img.src = `/img/${c}.png`;
       img.alt = `${c} card`;
       cardsWrap.appendChild(img);
     });
@@ -1820,7 +1831,7 @@ function openColorModal(colors) {
     opt.className = "modal-option";
     opt.dataset.color = c;
     const img = document.createElement("img");
-    img.src = `img/${c}.png`;
+    img.src = `/img/${c}.png`;
     img.alt = `${c} ticket`;
     opt.appendChild(img);
     opt.addEventListener("click", () => {

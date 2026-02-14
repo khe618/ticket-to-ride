@@ -6,10 +6,36 @@ const Chance = require("chance");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const ROOM_NAME_REGEX = /^[A-Za-z0-9_-]{1,40}$/;
 
-app.use(express.static(__dirname));
+app.use(express.static(__dirname, { index: false }));
 
 app.get("/", (req, res) => {
+  res.sendFile(path.join(__dirname, "home.html"));
+});
+
+app.get("/api/rooms", (req, res) => {
+  const roomList = [...rooms.values()]
+    .filter((room) => room.socketClientIds.size > 0 || room.lobbyPlayers.length > 0 || room.gameStarted)
+    .map((room) => ({
+      name: room.name,
+      players: room.lobbyPlayers.length,
+      inGame: !!room.gameStarted,
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  res.json({ rooms: roomList });
+});
+
+app.get("/:roomName", (req, res) => {
+  const normalized = sanitizeRoomName(req.params.roomName);
+  if (!normalized) {
+    res.redirect("/");
+    return;
+  }
+  if (req.params.roomName !== normalized) {
+    res.redirect(`/${normalized}`);
+    return;
+  }
   res.sendFile(path.join(__dirname, "index.html"));
 });
 
@@ -678,6 +704,12 @@ function sanitizeName(value) {
     .slice(0, 24);
 }
 
+function sanitizeRoomName(value) {
+  const room = String(value || '').trim().toLowerCase();
+  if (!ROOM_NAME_REGEX.test(room)) return '';
+  return room;
+}
+
 function sanitizeToken(value) {
   const token = String(value || '').trim();
   if (!token) return '';
@@ -735,11 +767,49 @@ function initGame(players) {
   };
 }
 
-const lobbyPlayers = [];
-const socketClientIds = new Map();
-const socketsByClientId = new Map();
+const rooms = new Map();
+const wsRooms = new Map();
+let lobbyPlayers = [];
+let socketClientIds = new Map();
+let socketsByClientId = new Map();
 let game = null;
 let gameStarted = false;
+
+function getOrCreateRoomState(roomName) {
+  if (!rooms.has(roomName)) {
+    rooms.set(roomName, {
+      name: roomName,
+      lobbyPlayers: [],
+      socketClientIds: new Map(),
+      socketsByClientId: new Map(),
+      game: null,
+      gameStarted: false,
+    });
+  }
+  return rooms.get(roomName);
+}
+
+function withRoomState(roomName, fn) {
+  const state = getOrCreateRoomState(roomName);
+  lobbyPlayers = state.lobbyPlayers;
+  socketClientIds = state.socketClientIds;
+  socketsByClientId = state.socketsByClientId;
+  game = state.game;
+  gameStarted = state.gameStarted;
+
+  try {
+    return fn(state);
+  } finally {
+    state.lobbyPlayers = lobbyPlayers;
+    state.socketClientIds = socketClientIds;
+    state.socketsByClientId = socketsByClientId;
+    state.game = game;
+    state.gameStarted = gameStarted;
+    if (state.socketClientIds.size === 0 && state.lobbyPlayers.length === 0 && !state.gameStarted) {
+      rooms.delete(roomName);
+    }
+  }
+}
 
 function addSocketBinding(clientId, ws) {
   if (!socketsByClientId.has(clientId)) {
@@ -831,7 +901,7 @@ function sendLobby(ws) {
 }
 
 function broadcastLobby() {
-  wss.clients.forEach((client) => {
+  socketClientIds.forEach((_, client) => {
     if (client.readyState !== 1) return;
     sendLobby(client);
   });
@@ -1178,7 +1248,7 @@ function sendState(ws) {
 }
 
 function broadcastState() {
-  wss.clients.forEach((client) => {
+  socketClientIds.forEach((_, client) => {
     if (client.readyState !== 1) return;
     sendState(client);
   });
@@ -1192,9 +1262,8 @@ function broadcastChat(payload) {
       ts: payload?.ts || Date.now(),
     },
   });
-  wss.clients.forEach((client) => {
+  socketClientIds.forEach((clientId, client) => {
     if (client.readyState !== 1) return;
-    const clientId = socketClientIds.get(client);
     if (!clientId || !shouldShowGameForClient(clientId)) return;
     client.send(msg);
   });
@@ -1208,7 +1277,7 @@ function broadcastLog(payload) {
       ts: Date.now(),
     },
   });
-  wss.clients.forEach((client) => {
+  socketClientIds.forEach((_, client) => {
     if (client.readyState === 1) client.send(msg);
   });
 }
@@ -1226,25 +1295,43 @@ function ticketsUsedForClaim(playerIdx, color, len) {
   return used;
 }
 
-wss.on('connection', (ws) => {
-  const clientId = chance.guid();
-  bindSocketClientId(ws, clientId);
+wss.on('connection', (ws, req) => {
+  const host = req?.headers?.host || 'localhost';
+  let roomName = '';
+  try {
+    const reqUrl = new URL(req?.url || '/', `http://${host}`);
+    roomName = sanitizeRoomName(reqUrl.searchParams.get('room'));
+  } catch (err) {
+    roomName = '';
+  }
+  if (!roomName) {
+    sendError(ws, 'Missing or invalid room name.');
+    ws.close();
+    return;
+  }
 
-  ws.send(JSON.stringify({ type: 'auth', payload: { token: clientId } }));
-  sendLobby(ws);
-  sendState(ws);
+  wsRooms.set(ws, roomName);
+
+  withRoomState(roomName, () => {
+    const clientId = chance.guid();
+    bindSocketClientId(ws, clientId);
+    ws.send(JSON.stringify({ type: 'auth', payload: { token: clientId } }));
+    sendLobby(ws);
+    sendState(ws);
+  });
 
   ws.on('message', (data) => {
-    let msg = null;
-    try {
-      msg = JSON.parse(data.toString());
-    } catch (err) {
-      return;
-    }
+    withRoomState(roomName, () => {
+      let msg = null;
+      try {
+        msg = JSON.parse(data.toString());
+      } catch (err) {
+        return;
+      }
 
-    if (!msg || typeof msg.type !== 'string') return;
+      if (!msg || typeof msg.type !== 'string') return;
 
-    if (msg.type === 'auth') {
+      if (msg.type === 'auth') {
       const requested = sanitizeToken(msg.token);
       const nextClientId = requested || chance.guid();
       const currentClientId = socketClientIds.get(ws) || '';
@@ -1265,12 +1352,12 @@ wss.on('connection', (ws) => {
         }
       }
 
-      sendLobby(ws);
-      sendState(ws);
-      return;
-    }
+        sendLobby(ws);
+        sendState(ws);
+        return;
+      }
 
-    if (msg.type === 'join_lobby') {
+      if (msg.type === 'join_lobby') {
       const boundClientId = socketClientIds.get(ws) || '';
       if (lobbyPlayers.length >= PLAYER_POOL.length) {
         sendError(ws, 'Lobby is full.');
@@ -1303,10 +1390,10 @@ wss.on('connection', (ws) => {
         hex: chosen.hex,
       });
       broadcastLobby();
-      return;
-    }
+        return;
+      }
 
-    if (msg.type === 'start_game') {
+      if (msg.type === 'start_game') {
       if (gameStarted) {
         sendError(ws, 'Game already started.');
         return;
@@ -1315,11 +1402,11 @@ wss.on('connection', (ws) => {
         sendError(ws, 'Need at least 2 players to start.');
         return;
       }
-      startGame();
-      return;
-    }
+        startGame();
+        return;
+      }
 
-    if (msg.type === 'return_to_lobby') {
+      if (msg.type === 'return_to_lobby') {
       if (!gameStarted || !game || !game.gameOver) return;
       const boundClientId = socketClientIds.get(ws) || '';
       const playerIdx = getPlayerIndexForClient(boundClientId);
@@ -1327,14 +1414,14 @@ wss.on('connection', (ws) => {
       addPlayerToLobby(game.players[playerIdx]);
       maybeFinishGameAfterReturns();
       broadcastLobby();
-      return;
-    }
+        return;
+      }
 
-    if (!gameStarted || !game) return;
+      if (!gameStarted || !game) return;
 
-    const playerIdx = getPlayerIndexForSocket(ws);
-    if (playerIdx < 0) return;
-    if (msg.type === 'chat_send') {
+      const playerIdx = getPlayerIndexForSocket(ws);
+      if (playerIdx < 0) return;
+      if (msg.type === 'chat_send') {
       const text = sanitizeChatText(msg.text);
       if (!text) return;
       const player = game.players[playerIdx];
@@ -1353,9 +1440,9 @@ wss.on('connection', (ws) => {
         game.chatMessages = game.chatMessages.slice(game.chatMessages.length - CHAT_HISTORY_LIMIT);
       }
       broadcastChat(chatMessage);
-      return;
-    }
-    if (msg.type === 'select_tickets') {
+        return;
+      }
+      if (msg.type === 'select_tickets') {
       const offer = game.destinationOffersByPlayer[playerIdx] || [];
       const selectionMode = game.destinationSelectionModeByPlayer[playerIdx] || 'setup';
       const minKeep = game.destinationTicketMinKeepByPlayer[playerIdx] || DESTINATION_TICKET_MIN_KEEP;
@@ -1419,20 +1506,20 @@ wss.on('connection', (ws) => {
         });
       }
       broadcastState();
-      return;
-    }
-    if (game.gameOver) return;
-    if (game.destinationSelectionPendingByPlayer[playerIdx]) {
+        return;
+      }
+      if (game.gameOver) return;
+      if (game.destinationSelectionPendingByPlayer[playerIdx]) {
       sendError(ws, 'Choose your destination tickets first.');
-      return;
-    }
-    if (game.setupPhase) {
+        return;
+      }
+      if (game.setupPhase) {
       sendError(ws, 'Waiting for other players to choose destination tickets.');
-      return;
-    }
-    if (playerIdx !== game.currentTurn) return;
+        return;
+      }
+      if (playerIdx !== game.currentTurn) return;
 
-    if (msg.type === 'draw_destination_tickets') {
+      if (msg.type === 'draw_destination_tickets') {
       if (game.destinationSelectionPendingByPlayer[playerIdx]) {
         sendError(ws, 'Choose your destination tickets first.');
         return;
@@ -1452,10 +1539,10 @@ wss.on('connection', (ws) => {
         sfx: 'destination_ticket_draw',
       });
       broadcastState();
-      return;
-    }
+        return;
+      }
 
-    if (msg.type === 'draw_faceup') {
+      if (msg.type === 'draw_faceup') {
       const idx = Number(msg.index);
       if (!Number.isFinite(idx)) return;
       if (idx < 0 || idx >= game.faceUp.length) return;
@@ -1486,10 +1573,10 @@ wss.on('connection', (ws) => {
         sfx: 'ticket_select',
       });
       broadcastState();
-      return;
-    }
+        return;
+      }
 
-    if (msg.type === 'draw_deck') {
+      if (msg.type === 'draw_deck') {
       const color = drawFromDeck();
       if (!color) return;
       if (game.turnDrawCount >= 2) return;
@@ -1506,10 +1593,10 @@ wss.on('connection', (ws) => {
         sfx: 'ticket_select',
       });
       broadcastState();
-      return;
-    }
+        return;
+      }
 
-    if (msg.type === 'submit_route') {
+      if (msg.type === 'submit_route') {
       const rawEdgeId = String(msg.edgeId || '');
       const chosen = String(msg.color || '');
       const edgeId = normalizeEdgeId(rawEdgeId);
@@ -1589,35 +1676,39 @@ wss.on('connection', (ws) => {
         });
       }
       broadcastState();
-      console.log('[claim] accepted');
-    }
+        console.log('[claim] accepted');
+      }
+    });
   });
 
   ws.on('close', () => {
-    const disconnectedClientId = unbindSocket(ws);
-    if (!disconnectedClientId) return;
+    wsRooms.delete(ws);
+    withRoomState(roomName, () => {
+      const disconnectedClientId = unbindSocket(ws);
+      if (!disconnectedClientId) return;
 
-    const lobbyIdx = getLobbyPlayerIndex(disconnectedClientId);
-    if (lobbyIdx >= 0) {
-      lobbyPlayers.splice(lobbyIdx, 1);
-      maybeFinishGameAfterReturns();
-      broadcastLobby();
-    }
-
-    if (gameStarted && game) {
-      const playerIdx = getPlayerIndexForClient(disconnectedClientId);
-      if (playerIdx >= 0 && !isClientConnected(disconnectedClientId) && game.players[playerIdx].connected !== false) {
-        game.players[playerIdx].connected = false;
-        broadcastLog({
-          playerName: game.players[playerIdx].name,
-          message: game.players[playerIdx].name + ' disconnected.',
-        });
+      const lobbyIdx = getLobbyPlayerIndex(disconnectedClientId);
+      if (lobbyIdx >= 0) {
+        lobbyPlayers.splice(lobbyIdx, 1);
         maybeFinishGameAfterReturns();
+        broadcastLobby();
       }
-      maybeResetGameIfAllPlayersDisconnected();
-      broadcastLobby();
-      return;
-    }
+
+      if (gameStarted && game) {
+        const playerIdx = getPlayerIndexForClient(disconnectedClientId);
+        if (playerIdx >= 0 && !isClientConnected(disconnectedClientId) && game.players[playerIdx].connected !== false) {
+          game.players[playerIdx].connected = false;
+          broadcastLog({
+            playerName: game.players[playerIdx].name,
+            message: game.players[playerIdx].name + ' disconnected.',
+          });
+          maybeFinishGameAfterReturns();
+        }
+        maybeResetGameIfAllPlayersDisconnected();
+        broadcastLobby();
+        return;
+      }
+    });
   });
 });
 
