@@ -504,6 +504,84 @@ function generateMap(seedStr, params) {
   return { cities, edges: pruned, deg };
 }
 
+const PLAYER_SHAPES = ["circle", "square", "triangle", "star"];
+const PLAYER_SHAPE_GLYPHS = {
+  circle: "●",
+  square: "■",
+  triangle: "▲",
+  star: "★",
+};
+
+function playerShapeGlyph(shape) {
+  return PLAYER_SHAPE_GLYPHS[shape] || "";
+}
+
+function buildPlayerShapeMappings(players) {
+  const byId = new Map();
+  const byColor = {};
+  if (!Array.isArray(players)) return { byId, byColor };
+  players.forEach((player, idx) => {
+    const shape = PLAYER_SHAPES[idx % PLAYER_SHAPES.length];
+    const playerId = String(player?.id || "");
+    const color = String(player?.color || "").toLowerCase();
+    if (playerId) byId.set(playerId, shape);
+    if (color) byColor[color] = shape;
+  });
+  return { byId, byColor };
+}
+
+function createRouteClaimShape(shape, cx, cy, size, rotationDeg = 0) {
+  const ns = "http://www.w3.org/2000/svg";
+  const symbolSize = Math.max(5, size * 0.7);
+  let shapeEl = null;
+
+  if (shape === "circle") {
+    shapeEl = document.createElementNS(ns, "circle");
+    shapeEl.setAttribute("cx", cx);
+    shapeEl.setAttribute("cy", cy);
+    shapeEl.setAttribute("r", symbolSize * 0.3);
+  } else if (shape === "square") {
+    const side = symbolSize * 0.6;
+    shapeEl = document.createElementNS(ns, "rect");
+    shapeEl.setAttribute("x", cx - side / 2);
+    shapeEl.setAttribute("y", cy - side / 2);
+    shapeEl.setAttribute("width", side);
+    shapeEl.setAttribute("height", side);
+    shapeEl.setAttribute("rx", 1.5);
+    shapeEl.setAttribute("ry", 1.5);
+  } else if (shape === "triangle") {
+    const r = symbolSize * 0.4;
+    const points = [
+      `${cx} ${cy - r}`,
+      `${cx + r * 0.86} ${cy + r * 0.55}`,
+      `${cx - r * 0.86} ${cy + r * 0.55}`,
+    ];
+    shapeEl = document.createElementNS(ns, "polygon");
+    shapeEl.setAttribute("points", points.join(" "));
+  } else if (shape === "star") {
+    const outer = symbolSize * 0.42;
+    const inner = outer * 0.5;
+    const points = [];
+    for (let i = 0; i < 10; i++) {
+      const angle = -Math.PI / 2 + i * (Math.PI / 5);
+      const radius = i % 2 === 0 ? outer : inner;
+      const x = cx + Math.cos(angle) * radius;
+      const y = cy + Math.sin(angle) * radius;
+      points.push(`${x} ${y}`);
+    }
+    shapeEl = document.createElementNS(ns, "polygon");
+    shapeEl.setAttribute("points", points.join(" "));
+  }
+
+  if (!shapeEl) return null;
+  if ((shape === "triangle" || shape === "star") && Number.isFinite(rotationDeg)) {
+    shapeEl.setAttribute("transform", `rotate(${rotationDeg} ${cx} ${cy})`);
+  }
+  shapeEl.setAttribute("class", `route-claim-shape route-claim-shape-${shape}`);
+  shapeEl.style.pointerEvents = "none";
+  return shapeEl;
+}
+
 /** ---------- SVG Rendering ---------- **/
 function renderSvg(svg, map, opts) {
   const { cities, edges } = map;
@@ -597,6 +675,8 @@ function renderSvg(svg, map, opts) {
   const tickets = opts.tickets || {};
   const trainsRemaining = Number.isFinite(opts.trainsRemaining) ? opts.trainsRemaining : Infinity;
   const canInteract = opts.interactive !== false;
+  const claimedShapeByColor = opts.claimedShapeByColor || {};
+  const showClaimShapes = !!opts.showClaimShapes;
   for (const e of edges) {
     const a = toScreen(cities[e.u]);
     const b = toScreen(cities[e.v]);
@@ -614,6 +694,7 @@ function renderSvg(svg, map, opts) {
 
     const pathData = `M ${a.x} ${a.y} Q ${cx} ${cy} ${b.x} ${b.y}`;
     const claimedHex = e.claimedBy ? CLAIM_COLOR_MAP[e.claimedBy] : null;
+    const claimedShape = e.claimedBy ? claimedShapeByColor[String(e.claimedBy).toLowerCase()] : "";
     const strokeHex = claimedHex || e.color.hex;
     const affordable = canInteract && !e.claimedBy && canAffordRoute(tickets, trainsRemaining, e.color.name, e.len);
 
@@ -700,6 +781,14 @@ function renderSvg(svg, map, opts) {
       }
       block.setAttribute("transform", `rotate(${ang} ${p.x} ${p.y})`);
       routeGroup.appendChild(block);
+      if (e.claimedBy && showClaimShapes && claimedShape) {
+        const shapeEl = createRouteClaimShape(claimedShape, p.x, p.y, bwDraw, ang);
+        if (shapeEl) {
+          shapeEl.dataset.edgeId = edgeId;
+          shapeEl.dataset.segIndex = String(i);
+          routeGroup.appendChild(shapeEl);
+        }
+      }
     }
   }
 
@@ -844,6 +933,10 @@ let lastEdgeClaimsById = null;
 let routeBuildAnimationTimers = [];
 let pendingCardPickupAnimations = [];
 let ticketArrivalTimers = [];
+let playerShapeById = new Map();
+let playerShapeByColor = {};
+let playersSnapshot = [];
+let currentTurnSnapshot = 0;
 const CLIENT_TOKEN_KEY = "ticket_to_ride_client_token";
 const COLORBLIND_MODE_KEY = "ticket_to_ride_colorblind_mode";
 const ticketSelectAudio = new Audio("/sound/ticket_select.wav");
@@ -900,6 +993,62 @@ function applyChatInputAccess() {
   if (chatSendBtnEl) chatSendBtnEl.disabled = !canSend;
 }
 
+function isColorBlindModeEnabled() {
+  return document.body.classList.contains("colorblind-mode");
+}
+
+function getPlayerShapeForPlayer(player) {
+  if (!player) return "";
+  const playerId = String(player.id || "");
+  if (playerId && playerShapeById.has(playerId)) {
+    return playerShapeById.get(playerId) || "";
+  }
+  const color = String(player.color || "").toLowerCase();
+  return color ? (playerShapeByColor[color] || "") : "";
+}
+
+function getPlayerShapeForChatEntry(entry) {
+  if (!entry) return "";
+  const playerId = String(entry.playerId || "");
+  if (playerId && playerShapeById.has(playerId)) {
+    return playerShapeById.get(playerId) || "";
+  }
+  const color = String(entry.playerColor || "").toLowerCase();
+  return color ? (playerShapeByColor[color] || "") : "";
+}
+
+function makePlayerShapeTag(shape, className = "player-shape-tag") {
+  const tag = document.createElement("span");
+  tag.className = className;
+  tag.dataset.shape = shape;
+  tag.textContent = playerShapeGlyph(shape);
+  tag.setAttribute("aria-hidden", "true");
+  return tag;
+}
+
+function applyPlayerSwatchAppearance(swatch, player) {
+  if (!(swatch instanceof HTMLElement)) return;
+  const color = player?.hex || player?.color || "#8b8b8b";
+  if (isColorBlindModeEnabled()) {
+    const shape = getPlayerShapeForPlayer(player);
+    swatch.classList.add("shape-mode");
+    if (shape) {
+      swatch.dataset.shape = shape;
+      swatch.textContent = playerShapeGlyph(shape);
+    } else {
+      delete swatch.dataset.shape;
+      swatch.textContent = "";
+    }
+    swatch.style.background = "rgba(255, 245, 226, 0.95)";
+    return;
+  }
+
+  swatch.classList.remove("shape-mode");
+  delete swatch.dataset.shape;
+  swatch.textContent = "";
+  swatch.style.background = color;
+}
+
 function renderChatMessages() {
   if (!chatMessagesEl) return;
   chatMessagesEl.innerHTML = "";
@@ -916,8 +1065,17 @@ function renderChatMessages() {
 
     const sender = document.createElement("span");
     sender.className = "chat-sender";
-    sender.textContent = `${entry.playerName || "Player"}: `;
-    if (entry.playerHex) sender.style.color = entry.playerHex;
+    if (isColorBlindModeEnabled()) {
+      const shape = getPlayerShapeForChatEntry(entry);
+      if (shape) sender.appendChild(makePlayerShapeTag(shape, "chat-shape-tag"));
+      const senderName = document.createElement("span");
+      senderName.textContent = `${entry.playerName || "Player"}: `;
+      sender.appendChild(senderName);
+      sender.style.color = "";
+    } else {
+      sender.textContent = `${entry.playerName || "Player"}: `;
+      sender.style.color = entry.playerHex || "";
+    }
     row.appendChild(sender);
 
     const text = document.createElement("span");
@@ -984,6 +1142,34 @@ function applyColorBlindMode(enabled) {
     window.localStorage.setItem(COLORBLIND_MODE_KEY, on ? "1" : "0");
   } catch (err) {
     // ignore storage failures
+  }
+  renderChatMessages();
+  if (playersSnapshot.length > 0) {
+    renderPlayers(playersSnapshot, currentTurnSnapshot);
+  }
+  if (gameStarted && currentMap) {
+    const prevSelectedEdgeId = selectedEdgeId;
+    const prevRouteText = routeInfo?.textContent || "";
+    clearRouteBuildAnimations();
+    render();
+    if (prevSelectedEdgeId) {
+      const selectedEl = svg.querySelector(`.route-color[data-edge-id="${prevSelectedEdgeId}"], .route-hit[data-edge-id="${prevSelectedEdgeId}"]`);
+      if (selectedEl && selectedEl.dataset.claimed !== "true" && selectedEl.dataset.affordable === "true") {
+        svg.querySelectorAll(`[data-edge-id="${prevSelectedEdgeId}"]`).forEach((el) => el.classList.add("route-selected"));
+        selectedEdgeId = prevSelectedEdgeId;
+        selectedEdgeMeta = {
+          edgeId: prevSelectedEdgeId,
+          routeColor: selectedEl.dataset.routeColor || selectedEl.dataset.color,
+          len: Number(selectedEl.dataset.len),
+          claimed: false,
+          affordable: true,
+        };
+        submitBtn.disabled = false;
+        if (routeInfo) {
+          routeInfo.textContent = prevRouteText || `${selectedEl.dataset.from} - ${selectedEl.dataset.to}`;
+        }
+      }
+    }
   }
 }
 
@@ -1170,6 +1356,8 @@ function render() {
     tickets: ticketCounts,
     trainsRemaining: myTrainsRemaining,
     interactive: canTakeNonDrawTurnActions(),
+    claimedShapeByColor: playerShapeByColor,
+    showClaimShapes: isColorBlindModeEnabled(),
   });
   wireRoutes();
   selectedEdgeId = null;
@@ -1738,7 +1926,7 @@ function renderPlayers(players, currentTurn) {
 
     const swatch = document.createElement("div");
     swatch.className = "player-swatch";
-    swatch.style.background = p.hex || p.color;
+    applyPlayerSwatchAppearance(swatch, p);
 
     const info = document.createElement("div");
     info.className = "player-info";
@@ -1913,7 +2101,6 @@ function applyState(state) {
   currentMap = { cities: state.cities || [], edges: nextEdges };
   destinationTickets = Array.isArray(state.destinationTickets) ? state.destinationTickets.slice() : [];
   destinationTicketResults = Array.isArray(state.destinationTicketResults) ? state.destinationTicketResults.slice() : [];
-  setChatMessages(Array.isArray(state.chatMessages) ? state.chatMessages : []);
   destinationSelectionPending = !!state.destinationSelectionPending;
   destinationTicketsRemaining = Number.isFinite(state.destinationTicketsRemaining)
     ? state.destinationTicketsRemaining
@@ -1936,6 +2123,12 @@ function applyState(state) {
   }));
   const myIdx = Number.isFinite(you.playerIndex) ? you.playerIndex : -1;
   myTrainsRemaining = myIdx >= 0 ? (players[myIdx]?.trains ?? 0) : 0;
+  playersSnapshot = players;
+  currentTurnSnapshot = state.currentTurn ?? 0;
+  const shapeMappings = buildPlayerShapeMappings(playersSnapshot);
+  playerShapeById = shapeMappings.byId;
+  playerShapeByColor = shapeMappings.byColor;
+  setChatMessages(Array.isArray(state.chatMessages) ? state.chatMessages : []);
 
   clearRouteBuildAnimations();
   render();
@@ -1948,7 +2141,7 @@ function applyState(state) {
   maybeAnimatePendingCardPickup(prevTicketCounts, ticketCounts);
   renderDestinationTickets();
 
-  const currentTurn = state.currentTurn ?? 0;
+  const currentTurn = currentTurnSnapshot;
   renderPlayers(players, currentTurn);
   updateTurnStatus(
     players,
@@ -2059,6 +2252,10 @@ function connectSocket() {
         gameOver = false;
         setupPhase = false;
         isMyTurn = false;
+        playersSnapshot = [];
+        currentTurnSnapshot = 0;
+        playerShapeById = new Map();
+        playerShapeByColor = {};
         destinationTickets = [];
         destinationTicketResults = [];
         destinationTicketsRemaining = 0;
