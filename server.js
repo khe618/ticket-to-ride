@@ -101,6 +101,7 @@ const ROUTE_POINTS = {
 };
 
 const STARTING_TRAINS = 45;
+const STARTING_TRAIN_CARDS = 4;
 const FINAL_TURN_THRESHOLD = 2;
 const DESTINATION_TICKET_COUNT = 30;
 const DESTINATION_TICKET_OFFER_COUNT = 5;
@@ -735,8 +736,17 @@ function initGame(players) {
   const destinationTickets = generateDestinationTickets(map, DESTINATION_TICKET_COUNT);
   const deck = buildDeck();
   shuffleInPlace(rng, deck);
-  const faceUp = deck.slice(0, 5);
   const ticketsByPlayer = players.map(() => Object.fromEntries(CARD_ORDER.map((k) => [k, 0])));
+  let deckIndex = 0;
+  for (let draw = 0; draw < STARTING_TRAIN_CARDS; draw++) {
+    for (let p = 0; p < players.length; p++) {
+      const card = deck[deckIndex++];
+      if (!card) break;
+      ticketsByPlayer[p][card] = (ticketsByPlayer[p][card] || 0) + 1;
+    }
+  }
+  const faceUp = deck.slice(deckIndex, deckIndex + 5);
+  deckIndex += faceUp.length;
   const destinationDeck = [...destinationTickets];
   shuffleInPlace(rng, destinationDeck);
   const destinationOffersByPlayer = players.map(() => destinationDeck.splice(0, DESTINATION_TICKET_OFFER_COUNT));
@@ -744,7 +754,7 @@ function initGame(players) {
   return {
     map,
     deck,
-    deckIndex: 5,
+    deckIndex,
     faceUp,
     faceUpReplacementSeq: 0,
     faceUpReplacementIndex: -1,

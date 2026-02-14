@@ -815,21 +815,57 @@ img {
     drop-shadow(0 3px 0 rgba(0,0,0,0.6))
     drop-shadow(0 -1px 0 rgba(255,255,255,0.45));
 }
+.route-seg.route-build-pending {
+  opacity: 0.46;
+}
+.route-seg.route-build-active {
+  opacity: 1;
+  stroke: rgba(255, 245, 196, 0.98);
+  stroke-width: 3.1;
+  filter:
+    drop-shadow(0 0 12px rgba(255, 230, 150, 0.95))
+    drop-shadow(0 0 3px rgba(85, 40, 0, 0.8));
+  animation: route-block-build 220ms ease-out;
+}
+.route.route-build-path {
+  filter:
+    drop-shadow(0 0 10px rgba(255, 222, 138, 0.72))
+    drop-shadow(0 0 3px rgba(95, 55, 6, 0.55));
+}
+@keyframes route-block-build {
+  from {
+    opacity: 0.6;
+  }
+  to {
+    opacity: 1;
+  }
+}
 .route-hit { cursor: pointer; }
 .route-hit.route-disabled { cursor: default; }
 .city {
   fill: #e7eaf0;
   stroke: #0b0d12;
   stroke-width: 3;
+  transition: fill 120ms ease, stroke 120ms ease, stroke-width 120ms ease, filter 120ms ease;
 }
-.city-glow { fill: rgba(110,160,255,0.18); }
+.city-glow {
+  fill: rgba(110,160,255,0.18);
+  opacity: 0.5;
+  transition: fill 120ms ease, opacity 120ms ease, filter 120ms ease;
+}
 .city.city-highlight {
-  fill: #ffe2a0;
-  stroke: #7a4f00;
-  stroke-width: 3.5;
+  fill: #fff0bc;
+  stroke: #6b3900;
+  stroke-width: 5;
+  filter:
+    drop-shadow(0 0 10px rgba(255, 195, 80, 0.95))
+    drop-shadow(0 0 3px rgba(85, 46, 0, 0.8));
 }
 .city-glow.city-highlight {
-  fill: rgba(255, 208, 98, 0.55);
+  fill: rgba(255, 183, 56, 0.78);
+  opacity: 1;
+  filter: drop-shadow(0 0 16px rgba(255, 186, 72, 0.85));
+  animation: city-highlight-pulse 820ms ease-in-out infinite alternate;
 }
 .label {
   font-size: 14px;
@@ -837,11 +873,21 @@ img {
   stroke: rgba(50, 35, 20, 0.9);
   stroke-width: 3px;
   paint-order: stroke fill;
+  transition: fill 120ms ease, stroke 120ms ease, stroke-width 120ms ease, filter 120ms ease;
 }
 .label.city-highlight {
-  fill: #fff6e0;
-  stroke: rgba(90, 58, 20, 0.96);
-  stroke-width: 3.8px;
+  fill: #fffdf4;
+  stroke: rgba(88, 46, 0, 0.98);
+  stroke-width: 4.6px;
+  filter: drop-shadow(0 0 5px rgba(255, 224, 140, 0.8));
+}
+@keyframes city-highlight-pulse {
+  from {
+    opacity: 0.82;
+  }
+  to {
+    opacity: 1;
+  }
 }
 .grid-line {
   stroke: rgba(120, 90, 60, 0.18);

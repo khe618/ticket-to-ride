@@ -680,6 +680,8 @@ function renderSvg(svg, map, opts) {
       block.setAttribute("fill", strokeHex);
       block.style.setProperty("--route-w", `${bw}px`);
       block.dataset.edgeId = edgeId;
+      block.dataset.segIndex = String(i);
+      block.dataset.segCount = String(e.len);
       block.dataset.len = String(e.len);
       block.dataset.color = e.claimedBy || e.color.name;
       block.dataset.routeColor = e.color.name;
@@ -835,6 +837,8 @@ let lobbyCanStart = false;
 let lastFaceUpCards = [];
 let activeFaceUpDealAnimation = null;
 let lastSeenFaceUpReplacementSeq = null;
+let lastEdgeClaimsById = null;
+let routeBuildAnimationTimers = [];
 const CLIENT_TOKEN_KEY = "ticket_to_ride_client_token";
 const ticketSelectAudio = new Audio("/sound/ticket_select.wav");
 ticketSelectAudio.preload = "auto";
@@ -1272,6 +1276,90 @@ function drawFaceUp(faceUp, animatedReplacementIndex = -1) {
   }
 }
 
+function clearRouteBuildAnimations() {
+  if (routeBuildAnimationTimers.length > 0) {
+    routeBuildAnimationTimers.forEach((timerId) => window.clearTimeout(timerId));
+    routeBuildAnimationTimers = [];
+  }
+  svg.querySelectorAll(".route-build-pending").forEach((el) => el.classList.remove("route-build-pending"));
+  svg.querySelectorAll(".route-build-active").forEach((el) => el.classList.remove("route-build-active"));
+  svg.querySelectorAll(".route-build-path").forEach((el) => el.classList.remove("route-build-path"));
+}
+
+function queueRouteBuildTimer(fn, delayMs) {
+  const timerId = window.setTimeout(() => {
+    routeBuildAnimationTimers = routeBuildAnimationTimers.filter((id) => id !== timerId);
+    fn();
+  }, delayMs);
+  routeBuildAnimationTimers.push(timerId);
+}
+
+function buildEdgeClaimsMap(edges) {
+  const claims = new Map();
+  if (!Array.isArray(edges)) return claims;
+  edges.forEach((e) => {
+    const edgeId = keyEdge(e.u, e.v);
+    claims.set(edgeId, String(e.claimedBy || ""));
+  });
+  return claims;
+}
+
+function findNewlyClaimedEdgeIds(prevClaimsByEdgeId, nextEdges) {
+  if (!(prevClaimsByEdgeId instanceof Map) || !Array.isArray(nextEdges)) return [];
+  const newlyClaimed = [];
+  nextEdges.forEach((e) => {
+    const edgeId = keyEdge(e.u, e.v);
+    const nextClaim = String(e.claimedBy || "");
+    const prevClaim = String(prevClaimsByEdgeId.get(edgeId) || "");
+    if (!prevClaim && nextClaim) {
+      newlyClaimed.push(edgeId);
+    }
+  });
+  return newlyClaimed;
+}
+
+function animateClaimedRoute(edgeId, edgeOffsetMs = 0) {
+  if (!edgeId) return;
+  const segs = [...svg.querySelectorAll(`.route-seg[data-edge-id="${edgeId}"]`)];
+  if (segs.length <= 0) return;
+  segs.sort((a, b) => Number(a.dataset.segIndex) - Number(b.dataset.segIndex));
+
+  const pathEls = [...svg.querySelectorAll(`.route-color[data-edge-id="${edgeId}"]`)];
+  segs.forEach((seg) => {
+    seg.classList.remove("route-build-active");
+    seg.classList.add("route-build-pending");
+  });
+  pathEls.forEach((el) => el.classList.add("route-build-path"));
+
+  const stepMs = 140;
+  const activeMs = 220;
+  segs.forEach((seg, idx) => {
+    queueRouteBuildTimer(() => {
+      seg.classList.add("route-build-active");
+      queueRouteBuildTimer(() => {
+        seg.classList.remove("route-build-active");
+      }, activeMs);
+    }, edgeOffsetMs + idx * stepMs);
+  });
+
+  const cleanupDelay = edgeOffsetMs + segs.length * stepMs + activeMs + 50;
+  queueRouteBuildTimer(() => {
+    segs.forEach((seg) => {
+      seg.classList.remove("route-build-pending");
+      seg.classList.remove("route-build-active");
+    });
+    pathEls.forEach((el) => el.classList.remove("route-build-path"));
+  }, cleanupDelay);
+}
+
+function animateClaimedRoutes(edgeIds) {
+  if (!Array.isArray(edgeIds) || edgeIds.length <= 0) return;
+  clearRouteBuildAnimations();
+  edgeIds.forEach((edgeId, idx) => {
+    animateClaimedRoute(edgeId, idx * 180);
+  });
+}
+
 function renderTicketPile() {
   ticketPileEl.innerHTML = "";
   for (const color of CARD_ORDER) {
@@ -1586,6 +1674,8 @@ function renderGameOver(state) {
 
 function applyState(state) {
   if (!state) return;
+  const nextEdges = Array.isArray(state.edges) ? state.edges : [];
+  const newlyClaimedEdgeIds = findNewlyClaimedEdgeIds(lastEdgeClaimsById, nextEdges);
   const nextFaceUp = Array.isArray(state.faceUp) ? state.faceUp.slice() : [];
   const hasServerFaceUpReplacementSignal = Number.isFinite(state.faceUpReplacementSeq);
   const nextFaceUpReplacementSeq = hasServerFaceUpReplacementSignal
@@ -1620,7 +1710,7 @@ function applyState(state) {
   setupPhase = !!state.setupPhase;
 
   ticketCounts = { ...Object.fromEntries(CARD_ORDER.map((k) => [k, 0])), ...(state.tickets || {}) };
-  currentMap = { cities: state.cities || [], edges: state.edges || [] };
+  currentMap = { cities: state.cities || [], edges: nextEdges };
   destinationTickets = Array.isArray(state.destinationTickets) ? state.destinationTickets.slice() : [];
   destinationTicketResults = Array.isArray(state.destinationTicketResults) ? state.destinationTicketResults.slice() : [];
   setChatMessages(Array.isArray(state.chatMessages) ? state.chatMessages : []);
@@ -1643,10 +1733,13 @@ function applyState(state) {
   const myIdx = Number.isFinite(you.playerIndex) ? you.playerIndex : -1;
   myTrainsRemaining = myIdx >= 0 ? (players[myIdx]?.trains ?? 0) : 0;
 
+  clearRouteBuildAnimations();
   render();
+  animateClaimedRoutes(newlyClaimedEdgeIds);
   drawFaceUp(nextFaceUp, replacementIndex);
   lastFaceUpCards = nextFaceUp;
   lastSeenFaceUpReplacementSeq = hasServerFaceUpReplacementSignal ? nextFaceUpReplacementSeq : null;
+  lastEdgeClaimsById = buildEdgeClaimsMap(nextEdges);
   renderTicketPile();
   renderDestinationTickets();
 
@@ -1772,7 +1865,9 @@ function connectSocket() {
         setInitialTicketSelectionFocus(false);
         lastFaceUpCards = [];
         lastSeenFaceUpReplacementSeq = null;
+        lastEdgeClaimsById = null;
         clearFaceUpDealAnimation();
+        clearRouteBuildAnimations();
         renderDestinationTickets();
         refreshDestinationControls();
         applyChatInputAccess();
