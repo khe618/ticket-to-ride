@@ -1261,11 +1261,19 @@ function renderGameOver(state) {
 
     const routePoints = Number.isFinite(entry.routePoints) ? entry.routePoints : 0;
     const destinationPoints = Number.isFinite(entry.destinationPoints) ? entry.destinationPoints : 0;
+    const globetrotterBonus = Number.isFinite(entry.globetrotterBonus) ? entry.globetrotterBonus : 0;
     const breakdown = document.createElement("div");
     breakdown.className = "standing-breakdown";
     const destinationSign = destinationPoints >= 0 ? "+" : "";
-    breakdown.textContent = `Trains: ${routePoints} pts | Tickets: ${destinationSign}${destinationPoints} pts`;
+    const globetrotterSign = globetrotterBonus >= 0 ? "+" : "";
+    breakdown.textContent = `Trains: ${routePoints} pts | Tickets: ${destinationSign}${destinationPoints} pts | Globetrotter: ${globetrotterSign}${globetrotterBonus} pts`;
     details.appendChild(breakdown);
+    if (globetrotterBonus > 0) {
+      const badge = document.createElement("div");
+      badge.className = "standing-globetrotter";
+      badge.textContent = "Received Globetrotter bonus";
+      details.appendChild(badge);
+    }
 
     const ticketList = document.createElement("div");
     ticketList.className = "standing-ticket-list";

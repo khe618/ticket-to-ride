@@ -74,13 +74,14 @@ const ROUTE_POINTS = {
   6: 15,
 };
 
-const STARTING_TRAINS = 10;
+const STARTING_TRAINS = 45;
 const FINAL_TURN_THRESHOLD = 2;
 const DESTINATION_TICKET_COUNT = 30;
 const DESTINATION_TICKET_OFFER_COUNT = 5;
 const DESTINATION_TICKET_MIN_KEEP = 2;
 const DESTINATION_TICKET_DRAW_COUNT = 3;
 const DESTINATION_TICKET_DRAW_MIN_KEEP = 1;
+const GLOBETROTTER_BONUS_POINTS = 10;
 
 const PLAYER_POOL = [
   { color: "red", hex: "#cc0000" },
@@ -853,6 +854,15 @@ function maybeFinishGameAfterReturns() {
   gameStarted = false;
 }
 
+function maybeResetGameIfAllPlayersDisconnected() {
+  if (!gameStarted || !game) return;
+  const allPlayersDisconnected = game.players.every((p) => !isClientConnected(p.id));
+  if (!allPlayersDisconnected) return;
+  lobbyPlayers.splice(0, lobbyPlayers.length);
+  game = null;
+  gameStarted = false;
+}
+
 function startGame() {
   if (gameStarted) return;
   if (lobbyPlayers.length < 2) return;
@@ -936,6 +946,15 @@ function buildDestinationTicketBreakdownForPlayer(playerIdx) {
   return { pointsDelta: delta, tickets: detail };
 }
 
+function computeGlobetrotterBonuses(destinationBreakdowns) {
+  if (!Array.isArray(destinationBreakdowns) || destinationBreakdowns.length === 0) return [];
+  const completedCounts = destinationBreakdowns.map((b) =>
+    (b?.tickets || []).reduce((acc, t) => acc + (t.completed ? 1 : 0), 0)
+  );
+  const maxCompleted = Math.max(...completedCounts);
+  return completedCounts.map((count) => (count === maxCompleted ? GLOBETROTTER_BONUS_POINTS : 0));
+}
+
 function computeScores(options = {}) {
   const includeDestinationTickets = !!options.includeDestinationTickets;
   if (!game) return [];
@@ -948,7 +967,7 @@ function computeScores(options = {}) {
   return routeScores.map((routeScore, idx) => routeScore + destinationBreakdowns[idx].pointsDelta);
 }
 
-function buildStandings(scores, routeScores, destinationBreakdowns) {
+function buildStandings(scores, routeScores, destinationBreakdowns, globetrotterBonuses) {
   if (!game) return [];
   return game.players
     .map((p, idx) => ({
@@ -960,6 +979,7 @@ function buildStandings(scores, routeScores, destinationBreakdowns) {
       routePoints: routeScores ? (routeScores[idx] || 0) : 0,
       destinationPoints: destinationBreakdowns ? (destinationBreakdowns[idx]?.pointsDelta || 0) : 0,
       destinationTickets: destinationBreakdowns ? (destinationBreakdowns[idx]?.tickets || []) : [],
+      globetrotterBonus: globetrotterBonuses ? (globetrotterBonuses[idx] || 0) : 0,
     }))
     .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
 }
@@ -972,8 +992,11 @@ function endGame() {
   const destinationBreakdowns = game.players.map((_, idx) =>
     buildDestinationTicketBreakdownForPlayer(idx)
   );
-  const scores = routeScores.map((routeScore, idx) => routeScore + destinationBreakdowns[idx].pointsDelta);
-  game.standings = buildStandings(scores, routeScores, destinationBreakdowns);
+  const globetrotterBonuses = computeGlobetrotterBonuses(destinationBreakdowns);
+  const scores = routeScores.map(
+    (routeScore, idx) => routeScore + destinationBreakdowns[idx].pointsDelta + globetrotterBonuses[idx]
+  );
+  game.standings = buildStandings(scores, routeScores, destinationBreakdowns, globetrotterBonuses);
 }
 
 function triggerFinalRound(triggerIdx) {
@@ -1074,7 +1097,10 @@ function getStateForClient(clientId) {
   );
   const destinationTicketCounts = game.destinationTicketsByPlayer.map((tickets) => tickets.length);
   const scores = game.gameOver
-    ? computeScores({ includeDestinationTickets: true })
+    ? game.players.map((p) => {
+        const standing = (game.standings || []).find((s) => s.id === p.id);
+        return standing ? standing.score : 0;
+      })
     : computeScores({ includeDestinationTickets: false });
   const deckRemaining = Math.max(0, (game.deck.length - game.deckIndex) + game.discard.length);
   const finalRoundTriggeredByPlayer = game.players.find((p) => p.id === game.finalRoundTriggeredBy) || null;
@@ -1527,8 +1553,9 @@ wss.on('connection', (ws) => {
           message: game.players[playerIdx].name + ' disconnected.',
         });
         maybeFinishGameAfterReturns();
-        broadcastLobby();
       }
+      maybeResetGameIfAllPlayersDisconnected();
+      broadcastLobby();
       return;
     }
   });
