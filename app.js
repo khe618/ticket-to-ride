@@ -786,7 +786,11 @@ const colorCancelEl = document.getElementById("colorCancel");
 const gameOverModalEl = document.getElementById("gameOverModal");
 const gameOverSummaryEl = document.getElementById("gameOverSummary");
 const standingsListEl = document.getElementById("standingsList");
+const gameOverCloseBtnEl = document.getElementById("gameOverCloseBtn");
 const returnLobbyBtnEl = document.getElementById("returnLobbyBtn");
+const endGameActionsEl = document.getElementById("endGameActions");
+const viewResultsBtnEl = document.getElementById("viewResultsBtn");
+const sidebarReturnLobbyBtnEl = document.getElementById("sidebarReturnLobbyBtn");
 const howToPlayModalEl = document.getElementById("howToPlayModal");
 const howToPlayCloseBtnEl = document.getElementById("howToPlayCloseBtn");
 const chatPanelEl = document.getElementById("chatPanel");
@@ -868,7 +872,7 @@ function setChatCollapsed(collapsed) {
   if (!chatPanelEl || !chatToggleBtnEl) return;
   chatPanelEl.classList.toggle("collapsed", !!collapsed);
   chatToggleBtnEl.setAttribute("aria-expanded", collapsed ? "false" : "true");
-  chatToggleBtnEl.textContent = collapsed ? "□" : "-";
+  chatToggleBtnEl.textContent = collapsed ? "\u25A1" : "-";
   chatToggleBtnEl.setAttribute("aria-label", collapsed ? "Show chat" : "Hide chat");
 }
 
@@ -929,6 +933,21 @@ function appendChatMessage(entry) {
 
 function hideGameOverModal() {
   if (gameOverModalEl) gameOverModalEl.classList.add("hidden");
+}
+
+function showGameOverModal() {
+  if (gameOverModalEl) gameOverModalEl.classList.remove("hidden");
+}
+
+function refreshEndGameControls() {
+  if (endGameActionsEl) endGameActionsEl.classList.toggle("hidden", !gameOver);
+  const canReturn = !!(gameOver && amPlayer && ws && ws.readyState === WebSocket.OPEN);
+  if (sidebarReturnLobbyBtnEl) sidebarReturnLobbyBtnEl.disabled = !canReturn;
+}
+
+function sendReturnToLobby() {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  ws.send(JSON.stringify({ type: "return_to_lobby" }));
 }
 
 function showHowToPlayModal() {
@@ -1377,16 +1396,31 @@ function renderGameOver(state) {
     const routePoints = Number.isFinite(entry.routePoints) ? entry.routePoints : 0;
     const destinationPoints = Number.isFinite(entry.destinationPoints) ? entry.destinationPoints : 0;
     const globetrotterBonus = Number.isFinite(entry.globetrotterBonus) ? entry.globetrotterBonus : 0;
+    const longestRoadBonus = Number.isFinite(entry.longestRoadBonus) ? entry.longestRoadBonus : 0;
+    const longestRoadLength = Number.isFinite(entry.longestRoadLength) ? entry.longestRoadLength : 0;
+    const bonusPoints = Number.isFinite(entry.bonusPoints)
+      ? entry.bonusPoints
+      : (globetrotterBonus + longestRoadBonus);
     const breakdown = document.createElement("div");
     breakdown.className = "standing-breakdown";
     const destinationSign = destinationPoints >= 0 ? "+" : "";
-    const globetrotterSign = globetrotterBonus >= 0 ? "+" : "";
-    breakdown.textContent = `Trains: ${routePoints} pts | Tickets: ${destinationSign}${destinationPoints} pts | Globetrotter: ${globetrotterSign}${globetrotterBonus} pts`;
+    const bonusSign = bonusPoints >= 0 ? "+" : "";
+    breakdown.textContent = `Trains: ${routePoints} pts | Tickets: ${destinationSign}${destinationPoints} pts | Bonuses: ${bonusSign}${bonusPoints} pts`;
     details.appendChild(breakdown);
+    const roadLength = document.createElement("div");
+    roadLength.className = "standing-road-length";
+    roadLength.textContent = `Longest road length: ${longestRoadLength}`;
+    details.appendChild(roadLength);
     if (globetrotterBonus > 0) {
       const badge = document.createElement("div");
       badge.className = "standing-globetrotter";
-      badge.textContent = "Received Globetrotter bonus";
+      badge.textContent = `Received Globetrotter bonus (+${globetrotterBonus} pts)`;
+      details.appendChild(badge);
+    }
+    if (longestRoadBonus > 0) {
+      const badge = document.createElement("div");
+      badge.className = "standing-longest-road";
+      badge.textContent = `Received Longest Road bonus (+${longestRoadBonus} pts)`;
       details.appendChild(badge);
     }
 
@@ -1418,7 +1452,7 @@ function renderGameOver(state) {
   });
 
   gameOverSummaryEl.textContent = "Final round complete.";
-  gameOverModalEl.classList.remove("hidden");
+  showGameOverModal();
 }
 
 function applyState(state) {
@@ -1508,6 +1542,7 @@ function applyState(state) {
   } else {
     hideGameOverModal();
   }
+  refreshEndGameControls();
 
   updateCardSizing();
 }
@@ -1586,6 +1621,7 @@ function connectSocket() {
         renderDestinationTickets();
         refreshDestinationControls();
         applyChatInputAccess();
+        refreshEndGameControls();
         setGameVisibility(false);
       }
       return;
@@ -1686,6 +1722,16 @@ howToPlayModalEl?.addEventListener("click", (e) => {
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && howToPlayModalEl && !howToPlayModalEl.classList.contains("hidden")) {
     hideHowToPlayModal();
+    return;
+  }
+  if (e.key === "Escape" && gameOverModalEl && !gameOverModalEl.classList.contains("hidden")) {
+    hideGameOverModal();
+  }
+});
+
+gameOverModalEl?.addEventListener("click", (e) => {
+  if (e.target === gameOverModalEl) {
+    hideGameOverModal();
   }
 });
 
@@ -1705,8 +1751,20 @@ chatFormEl?.addEventListener("submit", (e) => {
 });
 
 returnLobbyBtnEl?.addEventListener("click", () => {
-  if (!ws || ws.readyState !== WebSocket.OPEN) return;
-  ws.send(JSON.stringify({ type: "return_to_lobby" }));
+  sendReturnToLobby();
+});
+
+sidebarReturnLobbyBtnEl?.addEventListener("click", () => {
+  sendReturnToLobby();
+});
+
+viewResultsBtnEl?.addEventListener("click", () => {
+  if (!gameOver) return;
+  showGameOverModal();
+});
+
+gameOverCloseBtnEl?.addEventListener("click", () => {
+  hideGameOverModal();
 });
 
 drawDestinationBtnEl?.addEventListener("click", () => {
@@ -1868,6 +1926,7 @@ setChatCollapsed(false);
 applyChatInputAccess();
 renderChatMessages();
 refreshDestinationControls();
+refreshEndGameControls();
 connectSocket();
 
 if (typeof ResizeObserver !== "undefined") {

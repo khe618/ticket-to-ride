@@ -633,6 +633,14 @@ img {
 }
 .log-list .log-item { margin-bottom: 6px; }
 .log-list .log-item:last-child { margin-bottom: 0; }
+.endgame-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.endgame-actions .submit {
+  width: 100%;
+}
 .log-item {
   display: flex;
   align-items: center;
@@ -970,9 +978,17 @@ img {
 .standing-breakdown {
   font-weight: 700;
 }
+.standing-road-length {
+  font-size: 12px;
+  color: #4b3523;
+}
 .standing-globetrotter {
   font-weight: 700;
   color: #2f6e3d;
+}
+.standing-longest-road {
+  font-weight: 700;
+  color: #6a4f12;
 }
 .standing-ticket-list {
   display: flex;

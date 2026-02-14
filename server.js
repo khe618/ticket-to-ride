@@ -100,7 +100,7 @@ const ROUTE_POINTS = {
   6: 15,
 };
 
-const STARTING_TRAINS = 45;
+const STARTING_TRAINS = 10;
 const FINAL_TURN_THRESHOLD = 2;
 const DESTINATION_TICKET_COUNT = 30;
 const DESTINATION_TICKET_OFFER_COUNT = 5;
@@ -108,6 +108,7 @@ const DESTINATION_TICKET_MIN_KEEP = 2;
 const DESTINATION_TICKET_DRAW_COUNT = 3;
 const DESTINATION_TICKET_DRAW_MIN_KEEP = 1;
 const GLOBETROTTER_BONUS_POINTS = 10;
+const LONGEST_ROAD_BONUS_POINTS = 15;
 const CHAT_MAX_MESSAGE_LENGTH = 220;
 const CHAT_HISTORY_LIMIT = 120;
 
@@ -1026,6 +1027,54 @@ function buildDestinationTicketBreakdownForPlayer(playerIdx) {
   return { pointsDelta: delta, tickets: detail };
 }
 
+function computeLongestRoadLengthForPlayer(playerIdx) {
+  if (!game) return 0;
+  const player = game.players[playerIdx];
+  if (!player) return 0;
+  const claimedEdges = game.map.edges
+    .filter((e) => e.claimedBy === player.color)
+    .map((e) => ({ u: e.u, v: e.v, len: e.len }));
+  if (claimedEdges.length === 0) return 0;
+
+  const adj = Array.from({ length: game.map.cities.length }, () => []);
+  claimedEdges.forEach((edge, edgeIdx) => {
+    adj[edge.u].push({ edgeIdx, next: edge.v });
+    adj[edge.v].push({ edgeIdx, next: edge.u });
+  });
+
+  const usedEdge = Array(claimedEdges.length).fill(false);
+  let best = 0;
+
+  function dfs(node, totalLen) {
+    if (totalLen > best) best = totalLen;
+    const nextList = adj[node] || [];
+    for (const next of nextList) {
+      const idx = next.edgeIdx;
+      if (usedEdge[idx]) continue;
+      usedEdge[idx] = true;
+      dfs(next.next, totalLen + (claimedEdges[idx].len || 0));
+      usedEdge[idx] = false;
+    }
+  }
+
+  for (let node = 0; node < adj.length; node++) {
+    dfs(node, 0);
+  }
+
+  return best;
+}
+
+function computeLongestRoadLengths() {
+  if (!game) return [];
+  return game.players.map((_, idx) => computeLongestRoadLengthForPlayer(idx));
+}
+
+function computeLongestRoadBonuses(longestRoadLengths) {
+  if (!Array.isArray(longestRoadLengths) || longestRoadLengths.length === 0) return [];
+  const maxRoad = Math.max(...longestRoadLengths);
+  return longestRoadLengths.map((len) => (len === maxRoad ? LONGEST_ROAD_BONUS_POINTS : 0));
+}
+
 function computeGlobetrotterBonuses(destinationBreakdowns) {
   if (!Array.isArray(destinationBreakdowns) || destinationBreakdowns.length === 0) return [];
   const completedCounts = destinationBreakdowns.map((b) =>
@@ -1047,7 +1096,7 @@ function computeScores(options = {}) {
   return routeScores.map((routeScore, idx) => routeScore + destinationBreakdowns[idx].pointsDelta);
 }
 
-function buildStandings(scores, routeScores, destinationBreakdowns, globetrotterBonuses) {
+function buildStandings(scores, routeScores, destinationBreakdowns, globetrotterBonuses, longestRoadBonuses, longestRoadLengths) {
   if (!game) return [];
   return game.players
     .map((p, idx) => ({
@@ -1060,6 +1109,10 @@ function buildStandings(scores, routeScores, destinationBreakdowns, globetrotter
       destinationPoints: destinationBreakdowns ? (destinationBreakdowns[idx]?.pointsDelta || 0) : 0,
       destinationTickets: destinationBreakdowns ? (destinationBreakdowns[idx]?.tickets || []) : [],
       globetrotterBonus: globetrotterBonuses ? (globetrotterBonuses[idx] || 0) : 0,
+      longestRoadBonus: longestRoadBonuses ? (longestRoadBonuses[idx] || 0) : 0,
+      longestRoadLength: longestRoadLengths ? (longestRoadLengths[idx] || 0) : 0,
+      bonusPoints: (globetrotterBonuses ? (globetrotterBonuses[idx] || 0) : 0) +
+        (longestRoadBonuses ? (longestRoadBonuses[idx] || 0) : 0),
     }))
     .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
 }
@@ -1073,10 +1126,42 @@ function endGame() {
     buildDestinationTicketBreakdownForPlayer(idx)
   );
   const globetrotterBonuses = computeGlobetrotterBonuses(destinationBreakdowns);
+  const longestRoadLengths = computeLongestRoadLengths();
+  const longestRoadBonuses = computeLongestRoadBonuses(longestRoadLengths);
   const scores = routeScores.map(
-    (routeScore, idx) => routeScore + destinationBreakdowns[idx].pointsDelta + globetrotterBonuses[idx]
+    (routeScore, idx) => routeScore +
+      destinationBreakdowns[idx].pointsDelta +
+      globetrotterBonuses[idx] +
+      longestRoadBonuses[idx]
   );
-  game.standings = buildStandings(scores, routeScores, destinationBreakdowns, globetrotterBonuses);
+  game.standings = buildStandings(
+    scores,
+    routeScores,
+    destinationBreakdowns,
+    globetrotterBonuses,
+    longestRoadBonuses,
+    longestRoadLengths
+  );
+}
+
+function broadcastGameOverSummaryLog() {
+  if (!game || !game.gameOver) return;
+  const standings = Array.isArray(game.standings) ? game.standings : [];
+  if (standings.length === 0) {
+    broadcastLog({ message: 'Game over. Final standings are now available.' });
+    return;
+  }
+  const topScore = Number(standings[0]?.score || 0);
+  const winners = standings
+    .filter((entry) => Number(entry?.score || 0) === topScore)
+    .map((entry) => entry.name)
+    .filter((name) => !!name);
+  broadcastLog({ message: 'Game over. Final standings are now available.' });
+  if (winners.length === 1) {
+    broadcastLog({ message: `Winner: ${winners[0]} (${topScore} pts).` });
+  } else if (winners.length > 1) {
+    broadcastLog({ message: `Winners: ${winners.join(', ')} (${topScore} pts).` });
+  }
 }
 
 function triggerFinalRound(triggerIdx) {
@@ -1495,9 +1580,7 @@ wss.on('connection', (ws, req) => {
       if (selectionMode === 'draw') {
         advanceTurn();
         if (game.gameOver) {
-          broadcastLog({
-            message: 'Game over. Final standings are now available.',
-          });
+          broadcastGameOverSummaryLog();
         }
       } else if (game.destinationSelectionPendingByPlayer.every((pending) => !pending)) {
         game.setupPhase = false;
@@ -1572,6 +1655,9 @@ wss.on('connection', (ws, req) => {
         faceDown: false,
         sfx: 'ticket_select',
       });
+      if (game.gameOver) {
+        broadcastGameOverSummaryLog();
+      }
       broadcastState();
         return;
       }
@@ -1592,6 +1678,9 @@ wss.on('connection', (ws, req) => {
         faceDown: true,
         sfx: 'ticket_select',
       });
+      if (game.gameOver) {
+        broadcastGameOverSummaryLog();
+      }
       broadcastState();
         return;
       }
@@ -1671,9 +1760,7 @@ wss.on('connection', (ws, req) => {
       }
       advanceTurn({ tickFinalRound: !triggeredFinalRoundThisTurn });
       if (game.gameOver) {
-        broadcastLog({
-          message: 'Game over. Final standings are now available.',
-        });
+        broadcastGameOverSummaryLog();
       }
       broadcastState();
         console.log('[claim] accepted');

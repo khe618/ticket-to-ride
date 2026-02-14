@@ -47,6 +47,10 @@
         <div class="log-title">Game Log</div>
         <div id="logList" class="log-list"></div>
       </div>
+      <div id="endGameActions" class="endgame-actions hidden">
+        <button id="viewResultsBtn" class="submit" type="button">View Game Results</button>
+        <button id="sidebarReturnLobbyBtn" class="submit" type="button">Return to Lobby</button>
+      </div>
     </div>
     <div class="stage">
       <div class="stage-inner">
@@ -111,6 +115,7 @@
       <div id="gameOverSummary" class="gameover-summary"></div>
       <div id="standingsList" class="standings-list"></div>
       <div class="modal-actions">
+        <button id="gameOverCloseBtn" class="modal-btn" type="button">Close</button>
         <button id="returnLobbyBtn" class="modal-btn primary">Return to Lobby</button>
       </div>
     </div>
@@ -125,7 +130,7 @@
         <section class="howto-section">
           <h3>Setup</h3>
           <ul>
-            <li>Each player starts with 45 trains.</li>
+            <li>Each player starts with 10 trains.</li>
             <li>You are dealt 5 destination tickets and must keep at least 2.</li>
           </ul>
         </section>
@@ -161,6 +166,7 @@
             <li>If a player ends a turn with 2 or fewer trains, the final round begins.</li>
             <li>Every player gets one more turn, including the player who triggered it.</li>
             <li>Globetrotter bonus: player(s) with the most completed tickets get +10 points.</li>
+            <li>Longest Road bonus: player(s) with the highest total connected road length get +15 points.</li>
           </ul>
         </section>
       </div>
